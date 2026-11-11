@@ -21,6 +21,8 @@ internal static class Program
 
             return args[0].ToLowerInvariant() switch
             {
+                "dvd-physical-target" => PhysicalTarget(CliArguments.Parse(args.AsSpan(1))),
+                "dvd-physical-convert" => PhysicalConvert(CliArguments.Parse(args.AsSpan(1))),
                 "solve" => Solve(CliArguments.Parse(args.AsSpan(1))),
                 "encode" => Encode(CliArguments.Parse(args.AsSpan(1))),
                 "calibrate" => Calibrate(CliArguments.Parse(args.AsSpan(1))),
@@ -34,6 +36,28 @@ internal static class Program
             Console.Error.WriteLine($"error: {exception.Message}");
             return 1;
         }
+    }
+
+    private static int PhysicalTarget(CliArguments arguments)
+    {
+        DvdImageSolver.PhysicalImaging.PhysicalCalibration.Write(arguments.Require("output-dir"), arguments.GetInt("size", 6001));
+        return 0;
+    }
+
+    private static int PhysicalConvert(CliArguments arguments)
+    {
+        var settings = arguments.Has("profile")
+            ? JsonSerializer.Deserialize<DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings>(
+                File.ReadAllText(arguments.Require("profile")), DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.JsonOptions)
+                ?? throw new ArgumentException("Empty physical profile.")
+            : new DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings();
+        settings = settings with { CellUm = arguments.GetDouble("cell-um", settings.CellUm), Passes = arguments.GetInt("passes", settings.Passes) };
+        var result = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Prepare(new(
+            arguments.Require("image"), arguments.GetDouble("canvas-radius-mm", 58),
+            arguments.GetDouble("inner-radius-mm", 24.5), arguments.GetDouble("outer-radius-mm", 58), settings),
+            arguments.Require("output-dir"), (stage, value) => Console.WriteLine($"{stage}: {value:P0}"));
+        Console.WriteLine(JsonSerializer.Serialize(result, DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.JsonOptions));
+        return 0;
     }
 
     private static int Solve(CliArguments arguments)
@@ -871,7 +895,7 @@ internal static class Program
             arguments.GetDouble("pitch-linear", 0),
             arguments.GetDouble("pitch-quadratic", 0),
             arguments.GetDouble("pitch-cubic", 0),
-            ReadToneProfile(arguments));
+            ReadToneProfile(arguments), PhysicalBinary: arguments.GetBoolean("physical-binary", false));
     }
 
     /// <summary>Optional tone mapping of the sampled picture. Absent means the historical

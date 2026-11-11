@@ -286,6 +286,7 @@ public partial class BurnViewModel : ObservableObject
                 _state.DvdInnerRadius, _state.DvdOuterRadius,
                 _state.DvdPitchLinear, _state.DvdPitchQuadratic, _state.DvdPitchCubic,
                 _state.DvdDataDirectory, _state.DvdVolumeLabel, _state.DvdFilesAtOuterRing, _state.DvdReadCompatibility,
+                _state.DvdPhysicalEnabled, _state.DvdPhysicalProfileJson, _state.DvdPhysicalCellUm,
                 _state.ToneDitherStrength, _state.ToneBrightness, _state.ToneSrgbLinearization);
         }
         else if (IsBluRayBurn)
@@ -614,6 +615,8 @@ public partial class BurnViewModel : ObservableObject
                 else if (dvd)
                 {
                     DvdStreamingOptions options = ReadDvdStreamingOptions();
+                    if (_state.DvdPhysicalEnabled && StreamBurnCapacity.Resolve(options.OutputSectors, capacity.WritableSectors, mediaKind) != options.OutputSectors)
+                        throw new ArgumentException(L.T("当前盘片容量需要调整绘图区；请修改工程容量并重新计算物理结果后刻录。"));
                     options = options with
                     {
                         SourceImageOuterRadiusMm = options.OutputOuterRadiusMm,
@@ -899,7 +902,8 @@ public partial class BurnViewModel : ObservableObject
             PitchCubic: ParameterParser.ParseDouble(_state.DvdPitchCubic, L.T("DVD 轨距三次项")),
             UsableSectors: checked((uint)_state.GetUsableSectors(OpticalDiscFamily.Dvd)),
             Tone: _state.DvdTone,
-            ReadCompatibility: _state.DvdReadCompatibility);
+            ReadCompatibility: _state.DvdReadCompatibility,
+            PhysicalBinary: _state.DvdPhysicalEnabled);
         options.Validate();
         return options;
     }

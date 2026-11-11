@@ -11,6 +11,7 @@ internal static class SelfTests
 {
     internal static void Run()
     {
+        TestPhysicalConversion();
         TestTables();
         TestSy6Encoding();
         TestDataFrame();
@@ -25,6 +26,51 @@ internal static class SelfTests
         TestIsoOutput();
         TestCalibrationAndRange();
         Console.WriteLine("selftest: all checks passed");
+    }
+
+    private static void TestPhysicalConversion()
+    {
+        var t = new DvdImageSolver.PhysicalImaging.PhysicalTexture(.1, .3, .2);
+        double a = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Brdf(t, .3, .2, -.6, .1, .6, .8, 550, 740);
+        double b = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Brdf(t, -.6, .1, .3, .2, .6, .8, 550, 740);
+        True(Math.Abs(a - b) < 1e-12, "physical reciprocity");
+        double energy = 0; const int n = 301;
+        for (int y = 0; y < n; y++) for (int x = 0; x < n; x++)
+        {
+            double u = (x + .5) * 2 / n - 1, v = (y + .5) * 2 / n - 1;
+            if (u * u + v * v < 1) energy += DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Brdf(t, .3, .2, u, v, 1, 0, 550, 740) * 4 / (n * n);
+        }
+        True(energy >= 0 && energy <= .6001, "physical energy budget");
+        string directory = Path.Combine(Path.GetTempPath(), "physical-selftest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string source = Path.Combine(directory, "source.png");
+            RasterCodec.SavePng(source, 33, 33, Enumerable.Range(0, 33 * 33).Select(i => (byte)((i % 33) * 255 / 32)).ToArray(), true);
+            var settings = new DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings { CellUm = 500, MapSize = 17, Passes = 1 };
+            var request = new DvdImageSolver.PhysicalImaging.DvdPhysicalConversionRequest(source, 8, 2, 8, settings);
+            var first = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Prepare(request, Path.Combine(directory, "cache"));
+            var again = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Prepare(request, Path.Combine(directory, "cache"));
+            Equal(first.ContentHash, again.ContentHash, "physical cached hash");
+            var physicalRaster = RasterImage.Load(first.MaskedPath!, physicalBinary: true);
+            True(physicalRaster.SampleDisc(0, 0, 8, preserveDiscreteGrayscale: true).Alpha == 0, "physical hole is excluded");
+            True(physicalRaster.SampleDisc(4, 0, 8, preserveDiscreteGrayscale: true).Alpha == 255, "physical drawing alpha retained");
+            True(!RasterImage.Load(first.MaskedPath!).HasBinaryGrayscalePalette, "legacy transparent sampling is unchanged");
+            var raster = RasterCodec.LoadBgra32(first.BinaryPath);
+            True(raster.Pixels.Where((_, i) => i % 4 != 3).All(v => v is 0 or 255), "physical opaque binary pixels");
+            True(raster.Pixels.Where((_, i) => i % 4 == 3).All(v => v == 255), "physical alpha");
+            var changed = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Prepare(request with { Settings = settings with { Seed = 1 } }, Path.Combine(directory, "cache"));
+            True(changed.ContentHash != first.ContentHash, "physical parameter invalidates cache");
+            RasterCodec.SavePng(source, 1, 1, [255], true);
+            var solid = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Prepare(request with { Settings = settings with { Passes = 0 } }, Path.Combine(directory, "cache"));
+            True(File.Exists(solid.MaskedPath), "single-pixel source expands without changing physical grid");
+            using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+            bool cancelled = false;
+            try { DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Prepare(request, directory, cancellationToken: cancellation.Token); }
+            catch (OperationCanceledException) { cancelled = true; }
+            True(cancelled, "physical cancellation");
+        }
+        finally { Directory.Delete(directory, true); }
     }
 
     private static void TestTables()

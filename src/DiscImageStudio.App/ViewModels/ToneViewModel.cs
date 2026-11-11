@@ -45,6 +45,7 @@ public partial class ToneViewModel : ObservableObject
         _shell = shell;
         _state = state;
         _design = design;
+        ImportPhysicalProfileCommand = new RelayCommand(ImportPhysicalProfile);
         ResetToneCommand = new RelayCommand(ResetTone, () => _shell.IsProjectOpen);
         RefreshTonePreviewCommand = new RelayCommand(
             RefreshTonePreviewNow,
@@ -63,6 +64,23 @@ public partial class ToneViewModel : ObservableObject
     public bool IsCd => _design.IsCd;
 
     public bool IsDvd => _design.IsDvd;
+    public bool IsLegacyToneEnabled => !IsDvd || !_state.DvdPhysicalEnabled;
+    public sealed record PhysicalPreviewChoice(string Name, int Value);
+    public double[] PhysicalCellChoices { get; } = [20, 40, 80];
+    public IReadOnlyList<PhysicalPreviewChoice> PhysicalPreviewChoices
+    {
+        get
+        {
+            List<PhysicalPreviewChoice> choices = [new(L.T("实际二值纹理"), -1), new(L.T("响应与影调受限区域"), -2)];
+            try
+            {
+                if (_state.PhysicalSettings is { } settings)
+                    choices.AddRange(settings.Views.Select((view, index) => new PhysicalPreviewChoice(view.Name, index)));
+            }
+            catch (Exception exception) when (exception is ArgumentException or System.Text.Json.JsonException) { }
+            return choices;
+        }
+    }
 
     public bool IsBluRay => _design.IsBluRay;
 
@@ -99,6 +117,29 @@ public partial class ToneViewModel : ObservableObject
         return _tonePreviewReady ? L.T("实时更新") : L.T("导入图片后自动生成预览。");
     }
 
+    public RelayCommand ImportPhysicalProfileCommand { get; }
+    private void ImportPhysicalProfile()
+    {
+        string? path = _shell.Dialogs?.PickOpen(L.T("导入材料与灯位配置"), L.T("JSON 配置|*.json"));
+        if (path is null) return;
+        try
+        {
+            var settings = System.Text.Json.JsonSerializer.Deserialize<DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings>(
+                File.ReadAllText(path), DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.JsonOptions)
+                ?? throw new ArgumentException(L.T("配置为空。"));
+            settings.Validate();
+            _state.DvdPhysicalProfileJson = System.Text.Json.JsonSerializer.Serialize(settings,
+                DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.JsonOptions);
+            _state.DvdPhysicalCellUm = settings.CellUm;
+            _state.DvdPhysicalEnabled = true;
+            _state.DvdPhysicalPreviewIndex = -1;
+        }
+        catch (Exception exception) when (exception is ArgumentException or System.Text.Json.JsonException or IOException or UnauthorizedAccessException)
+        {
+            _shell.ShowToast(L.T("配置导入失败"), exception.Message, ToastKind.Error);
+        }
+    }
+
     public RelayCommand ResetToneCommand { get; }
 
     /// <summary>Redraws the tone preview without touching a parameter.</summary>
@@ -111,6 +152,7 @@ public partial class ToneViewModel : ObservableObject
         {
             OnPropertyChanged(nameof(IsCd));
             OnPropertyChanged(nameof(IsDvd));
+        OnPropertyChanged(nameof(IsLegacyToneEnabled));
             OnPropertyChanged(nameof(IsBluRay));
             ResetToneCommand.NotifyCanExecuteChanged();
             RefreshTonePreviewCommand.NotifyCanExecuteChanged();
@@ -142,7 +184,16 @@ public partial class ToneViewModel : ObservableObject
 
     private void State_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(DiscParametersState.ToneDitherStrength)
+        if (e.PropertyName is nameof(DiscParametersState.DvdPhysicalEnabled) or nameof(DiscParametersState.DvdPhysicalProfileJson))
+        {
+            OnPropertyChanged(nameof(PhysicalPreviewChoices));
+            OnPropertyChanged(nameof(IsLegacyToneEnabled));
+        }
+        if (e.PropertyName is nameof(DiscParametersState.DvdPhysicalEnabled)
+            or nameof(DiscParametersState.DvdPhysicalProfileJson)
+            or nameof(DiscParametersState.DvdPhysicalPreviewIndex)
+            or nameof(DiscParametersState.DvdPhysicalCellUm)
+            or nameof(DiscParametersState.ToneDitherStrength)
             or nameof(DiscParametersState.ToneLevels)
             or nameof(DiscParametersState.ToneBrightness)
             or nameof(DiscParametersState.ToneSrgbLinearization)
@@ -214,6 +265,14 @@ public partial class ToneViewModel : ObservableObject
 
     private void ScheduleTonePreview()
     {
+        if (IsDvd && _state.DvdPhysicalEnabled)
+        {
+            _tonePreviewCancellation?.Cancel();
+            ++_tonePreviewRevision;
+            ClearTonePreview();
+            TonePreviewStatus = L.T("物理优化参数已变更，请重新计算完整结果。");
+            return;
+        }
         if (!_shell.IsProjectOpen
             || _shell.CurrentWorkspace != Workspace.Design
             || _compositePath is null)
@@ -275,9 +334,18 @@ public partial class ToneViewModel : ObservableObject
             enteredGate = true;
             cancellationToken.ThrowIfCancellationRequested();
 
+            if (IsDvd && _state.DvdPhysicalEnabled)
+                sourcePath = await _design.EnsureExportCompositeAsync(cancellationToken);
             int samplesPerSector;
             bool hasFileRegionOverlay;
-            if (IsBluRay)
+            if (IsDvd && _state.DvdPhysicalEnabled)
+            {
+                string name = _state.DvdPhysicalPreviewIndex == -1 ? "masked.png" : _state.DvdPhysicalPreviewIndex == -2 ? "diagnostic.png" : $"view-{_state.DvdPhysicalPreviewIndex}.png";
+                File.Copy(Path.Combine(Path.GetDirectoryName(sourcePath)!, name), outputPath, true);
+                samplesPerSector = 0;
+                hasFileRegionOverlay = false;
+            }
+            else if (IsBluRay)
             {
                 BluRayDiscParameters parameters = ReadBluRayPreviewParameters();
                 bool invert = _state.BdInvertMapping;

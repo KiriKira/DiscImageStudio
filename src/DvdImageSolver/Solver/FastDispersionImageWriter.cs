@@ -62,7 +62,7 @@ public static class FastDispersionImageWriter
     {
         cancellationToken.ThrowIfCancellationRequested();
         Validate(options);
-        RasterImage image = RasterImage.Load(imagePath);
+        RasterImage image = RasterImage.Load(imagePath, options.ImageMapping.PhysicalBinary);
         PayloadImageSampler sampler = new(image, options.ImageMapping);
         int totalBlocks = checked((int)(options.FillSectors / DvdEccBlockEncoder.SectorCount));
         int parallelism = options.FastParallelism == 0
@@ -135,7 +135,7 @@ public static class FastDispersionImageWriter
         CancellationToken cancellationToken = default)
     {
         ValidateStream(output, options);
-        RasterImage image = RasterImage.Load(imagePath);
+        RasterImage image = RasterImage.Load(imagePath, options.ImageMapping.PhysicalBinary);
         PayloadImageSampler sampler = new(image, options.ImageMapping);
         return WriteSampledStream(sampler, output, options, progress, cancellationToken);
     }
@@ -570,10 +570,10 @@ public static class FastDispersionImageWriter
         // scalar trigonometry, so even coordinate-sensitive callbacks agree.
         // Constant-pitch batching regresses throughput while Asinh stays scalar;
         // retain its original loop until a separately validated path is faster.
-        internal bool SupportsSimdSampling => Vector256.IsHardwareAccelerated
+        internal bool SupportsSimdSampling => _image?.PhysicalBinary != true && Vector256.IsHardwareAccelerated
             && !_spiral.IsConstantPitch;
 
-        internal bool SupportsSampleReuse => _supportsReuseGeometry
+        internal bool SupportsSampleReuse => _image?.PhysicalBinary != true && _supportsReuseGeometry
             && (_referenceImage is not null || _image is not null);
 
         internal PayloadImageSampler(RasterImage image, ImageMappingOptions options)

@@ -757,6 +757,10 @@ public partial class ShellViewModel : ObservableObject
         {
             Geometry = ProjectSession.CaptureGeometry(current, State),
             Outputs = ProjectSession.CaptureOutputs(current, State),
+            SchemaVersion = current.IsDvd && State.DvdPhysicalEnabled ? ProjectJsonStore.ModuleSchemaVersion : ProjectJsonStore.CurrentSchemaVersion,
+            ModuleSettings = current.IsDvd && State.PhysicalSettings is { } physicalSettings
+                ? new() { ["dvd-physical"] = System.Text.Json.JsonSerializer.SerializeToElement(physicalSettings,
+                    DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.JsonOptions) } : null,
             Tone = ProjectSession.CaptureTone(current, State),
             BluRay = ProjectSession.CaptureBluRay(current, State),
             Layers = Design.CaptureLayers(),
@@ -897,6 +901,9 @@ public partial class ShellViewModel : ObservableObject
         nameof(DiscParametersState.BdFilesAtOuterRing),
         nameof(DiscParametersState.BdVolumeLabel),
         nameof(DiscParametersState.BdInvertMapping),
+        nameof(DiscParametersState.DvdPhysicalEnabled),
+        nameof(DiscParametersState.DvdPhysicalProfileJson),
+        nameof(DiscParametersState.DvdPhysicalCellUm),
         nameof(DiscParametersState.ToneDitherStrength),
         nameof(DiscParametersState.ToneLevels),
         nameof(DiscParametersState.ToneBrightness),

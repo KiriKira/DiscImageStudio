@@ -64,7 +64,9 @@ public sealed record ProjectDocument(
     DateTimeOffset CreatedUtc,
     DateTimeOffset ModifiedUtc,
     ToneProfile? Tone = null,
-    ProjectBluRaySettings? BluRay = null)
+    ProjectBluRaySettings? BluRay = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    Dictionary<string, JsonElement>? ModuleSettings = null)
 {
     public const string CdFamily = "cd";
     public const string DvdFamily = "dvd";
@@ -116,7 +118,9 @@ public sealed record ProjectDocument(
 /// can never leave a half-written project behind.</summary>
 public static class ProjectJsonStore
 {
+    // Ordinary projects keep the existing wire format; module snapshots opt into v3.
     public const int CurrentSchemaVersion = 2;
+    public const int ModuleSchemaVersion = 3;
     private const int LegacySchemaVersion = 1;
     public const string FileExtension = ".discproj";
     public const string FileFilter = "Disc Image Studio 工程|*.discproj";
@@ -166,7 +170,7 @@ public static class ProjectJsonStore
         // but never written back: saving is what migrates an old file to the current schema.
         ProjectDocument clean = document with
         {
-            SchemaVersion = CurrentSchemaVersion,
+            SchemaVersion = document.ModuleSettings is { Count: > 0 } ? ModuleSchemaVersion : CurrentSchemaVersion,
             ExtensionData = document.ExtensionData is { Count: > 0 } ? null : document.ExtensionData,
         };
         string temporaryPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
@@ -196,10 +200,18 @@ public static class ProjectJsonStore
     public static void Validate(ProjectDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        if (document.SchemaVersion is not (LegacySchemaVersion or CurrentSchemaVersion))
+        if (document.SchemaVersion is not (LegacySchemaVersion or CurrentSchemaVersion or ModuleSchemaVersion))
         {
             throw DiagnosticMessage.InvalidData(
                 $"不支持 schemaVersion={document.SchemaVersion}；当前支持 {LegacySchemaVersion} 与 {CurrentSchemaVersion}。");
+        }
+
+        if (document.ModuleSettings is { Count: > 0 })
+        {
+            if (document.SchemaVersion != ModuleSchemaVersion) throw new InvalidDataException("Module settings require project schema 3.");
+            foreach (var entry in document.ModuleSettings)
+                if (string.IsNullOrWhiteSpace(entry.Key) || entry.Value.ValueKind != JsonValueKind.Object)
+                    throw new InvalidDataException("Module settings must contain named JSON objects.");
         }
 
         if (document.SchemaVersion == LegacySchemaVersion

@@ -110,6 +110,8 @@ DiscModuleCatalog catalog = new(
 Equal(3, catalog.Modules.Count, "module count");
 Equal(OpticalDiscFamily.CompactDisc, catalog.Resolve("cd-generate").Descriptor.Family, "CD routing");
 Equal(OpticalDiscFamily.Dvd, catalog.Resolve("solve").Descriptor.Family, "DVD routing");
+Equal(OpticalDiscFamily.Dvd, catalog.Resolve("dvd-physical-convert").Descriptor.Family, "Physical conversion routing");
+Equal(OpticalDiscFamily.Dvd, catalog.Resolve("dvd-physical-target").Descriptor.Family, "Physical calibration routing");
 Equal(OpticalDiscFamily.BluRay, catalog.Resolve("bd-generate").Descriptor.Family, "Blu-ray routing");
 Equal(OpticalDiscFamily.BluRay, catalog.Resolve("bd-probe").Descriptor.Family, "Blu-ray probe routing");
 True(

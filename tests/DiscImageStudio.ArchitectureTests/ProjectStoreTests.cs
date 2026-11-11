@@ -5,6 +5,7 @@ internal static class ProjectStoreTests
 {
     public static void Run()
     {
+        TestPhysicalModuleRoundtrip();
         TestRoundtrip();
         TestBluRayRoundtrip();
         TestLegacySchemaUpgrade();
@@ -12,6 +13,34 @@ internal static class ProjectStoreTests
         TestLegacyImageProcessingSection();
         TestValidation();
         Require(true, "completed");
+    }
+
+    private static void TestPhysicalModuleRoundtrip()
+    {
+        var settings = new DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings { CellUm = 40 };
+        var options = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.JsonOptions;
+        var document = CreateDocument() with { SchemaVersion = 3, ModuleSettings = new()
+        { ["dvd-physical"] = System.Text.Json.JsonSerializer.SerializeToElement(settings, options) } };
+        string path = Path.Combine(CreateTempDirectory(), "physical.discproj");
+        ProjectJsonStore.Save(path, document);
+        var loaded = ProjectJsonStore.Load(path);
+        Require(loaded.SchemaVersion == 3 && loaded.ModuleSettings!.ContainsKey("dvd-physical"), "physical schema 3");
+        var state = new DiscImageStudio.ViewModels.DiscParametersState();
+        DiscImageStudio.ViewModels.ProjectSession.ApplyToState(loaded, state);
+        Require(state.DvdPhysicalEnabled && state.PhysicalSettings!.CellUm == 40, "physical snapshot restore");
+        DiscImageStudio.ViewModels.ProjectSession.ApplyToState(CreateDocument(), state);
+        Require(!state.DvdPhysicalEnabled && state.PhysicalSettings is null, "legacy project clears physical mode");
+        bool rejected = false;
+        try
+        {
+            DiscImageStudio.ViewModels.ProjectSession.ApplyToState(loaded with { ModuleSettings = new()
+                { ["dvd-physical"] = System.Text.Json.JsonSerializer.SerializeToElement(settings with { Provenance = "measured", Evidence = null }, options) } }, state);
+        }
+        catch (ArgumentException) { rejected = true; }
+        Require(rejected && !state.DvdPhysicalEnabled && state.DvdPhysicalProfileJson.Length == 0, "invalid physical snapshot leaves current state intact");
+        ProjectJsonStore.Save(path, loaded with { ModuleSettings = null });
+        Require(ProjectJsonStore.Load(path).SchemaVersion == 2, "disabled mode saves compatible schema 2");
+        Directory.Delete(Path.GetDirectoryName(path)!, true);
     }
 
     private static ProjectDocument CreateDocument(string name = "测试工程")
