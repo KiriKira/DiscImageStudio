@@ -11,6 +11,9 @@ internal static class SelfTests
 {
     internal static void Run()
     {
+        TestPhysicalConversion();
+        TestPhysicalHalftoneTone();
+        TestPhysicalCalibrationProjection();
         TestTables();
         TestSy6Encoding();
         TestDataFrame();
@@ -25,6 +28,175 @@ internal static class SelfTests
         TestIsoOutput();
         TestCalibrationAndRange();
         Console.WriteLine("selftest: all checks passed");
+    }
+
+    private static void TestPhysicalConversion()
+    {
+        var t = new DvdImageSolver.PhysicalImaging.PhysicalTexture(.1, .3, .2);
+        double a = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Brdf(t, .3, .2, -.6, .1, .6, .8, 550, 740);
+        double b = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Brdf(t, -.6, .1, .3, .2, .6, .8, 550, 740);
+        True(Math.Abs(a - b) < 1e-12, "physical reciprocity");
+        double energy = 0; const int n = 301;
+        for (int y = 0; y < n; y++) for (int x = 0; x < n; x++)
+        {
+            double u = (x + .5) * 2 / n - 1, v = (y + .5) * 2 / n - 1;
+            if (u * u + v * v < 1) energy += DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Brdf(t, .3, .2, u, v, 1, 0, 550, 740) * 4 / (n * n);
+        }
+        True(energy >= 0 && energy <= .6001, "physical energy budget");
+        string directory = Path.Combine(Path.GetTempPath(), "physical-selftest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string source = Path.Combine(directory, "source.png");
+            RasterCodec.SavePng(source, 33, 33, Enumerable.Range(0, 33 * 33).Select(i => (byte)((i % 33) * 255 / 32)).ToArray(), true);
+            var settings = new DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings { CellUm = 500, MapSize = 17, Passes = 1 };
+            var request = new DvdImageSolver.PhysicalImaging.DvdPhysicalConversionRequest(source, 8, 2, 8, settings);
+            var first = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Prepare(request, Path.Combine(directory, "cache"));
+            var again = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Prepare(request, Path.Combine(directory, "cache"));
+            Equal(first.ContentHash, again.ContentHash, "physical cached hash");
+            var physicalRaster = RasterImage.Load(first.MaskedPath!, physicalBinary: true);
+            True(physicalRaster.SampleDisc(0, 0, 8, preserveDiscreteGrayscale: true).Alpha == 0, "physical hole is excluded");
+            True(physicalRaster.SampleDisc(4, 0, 8, preserveDiscreteGrayscale: true).Alpha == 255, "physical drawing alpha retained");
+            True(!RasterImage.Load(first.MaskedPath!).HasBinaryGrayscalePalette, "legacy transparent sampling is unchanged");
+            var raster = RasterCodec.LoadBgra32(first.BinaryPath);
+            True(raster.Pixels.Where((_, i) => i % 4 != 3).All(v => v is 0 or 255), "physical opaque binary pixels");
+            True(raster.Pixels.Where((_, i) => i % 4 == 3).All(v => v == 255), "physical alpha");
+            var changed = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Prepare(request with { Settings = settings with { Seed = 1 } }, Path.Combine(directory, "cache"));
+            True(changed.ContentHash != first.ContentHash, "physical parameter invalidates cache");
+            RasterCodec.SavePng(source, 1, 1, [255], true);
+            var solid = DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Prepare(request with { Settings = settings with { Passes = 0 } }, Path.Combine(directory, "cache"));
+            True(File.Exists(solid.MaskedPath), "single-pixel source expands without changing physical grid");
+            using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+            bool cancelled = false;
+            try { DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.Prepare(request, directory, cancellationToken: cancellation.Token); }
+            catch (OperationCanceledException) { cancelled = true; }
+            True(cancelled, "physical cancellation");
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    private static void TestPhysicalHalftoneTone()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "physical-tone-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string source = Path.Combine(directory, "source.png"), cache = Path.Combine(directory, "cache");
+            var settings = new PhysicalImaging.DvdPhysicalConversionSettings
+            {
+                CellUm = 125, MapSize = 17, Passes = 0,
+                Views = [new("test", 0, 0, 800, [new(Samples: 1)])]
+            };
+            var request = new PhysicalImaging.DvdPhysicalConversionRequest(source, 8, 2, 8, settings);
+            double previous = -1;
+            foreach (byte level in new byte[] { 32, 64, 96, 128, 160, 192, 224 })
+            {
+                RasterCodec.SavePng(source, 1, 1, [level], true);
+                var result = PhysicalImaging.DvdPhysicalConversion.Prepare(request, cache);
+                double density = Density(result);
+                True(Math.Abs(density - level / 255.0) < .005, "physical perceptual patch density " + level);
+                True(density > previous, "physical monotonic gray ramp"); previous = density;
+                True(result.ClippedFraction == 0, "unmeasured inverse does not clip photo tone");
+            }
+            RasterCodec.SavePng(source, 1, 1, [128], true);
+            var baseline = PhysicalImaging.DvdPhysicalConversion.Prepare(request, cache);
+            var zeroContrast = settings with { Textures = [new(0, 0, 0), new(0, 0, 0)] };
+            var blind = PhysicalImaging.DvdPhysicalConversion.Prepare(request with { Settings = zeroContrast }, cache);
+            True(blind.UnobservableFraction == 1, "zero optical contrast is diagnosed");
+            True(Math.Abs(Density(blind) - 128 / 255.0) < .005, "unobservable response still diffuses gray");
+            True(File.ReadAllBytes(blind.BinaryPath).SequenceEqual(File.ReadAllBytes(baseline.BinaryPath)),
+                "uncalibrated illumination cannot rewrite initial halftone");
+            var linear = PhysicalImaging.DvdPhysicalConversion.Prepare(request with
+                { Settings = settings with { ToneEncoding = "linear" } }, cache);
+            True(Math.Abs(Density(linear) - .21586) < .005, "linear density is explicit rather than default");
+            var compensated = PhysicalImaging.DvdPhysicalConversion.Prepare(request with
+                { Settings = settings with { ReflectanceCompensation = 1 } }, cache);
+            True(Math.Abs(Density(compensated) - Density(baseline)) < settings.MaximumToneShift + .005,
+                "reflectance correction is bounded");
+
+            var thumbnailResult = PhysicalImaging.DvdPhysicalConversion.Prepare(request with
+                { Settings = zeroContrast with { CellUm = 25 } }, cache);
+            var thumbnail = RasterCodec.LoadBgra32(Path.Combine(Path.GetDirectoryName(thumbnailResult.BinaryPath)!, "density.png"));
+            Equal(512, thumbnail.Width, "physical thumbnail has bounded resolution");
+            True(Enumerable.Range(0, thumbnail.Width * thumbnail.Height).Any(i =>
+                thumbnail.Pixels[4 * i + 3] == 255 && thumbnail.Pixels[4 * i] is > 0 and < 255),
+                "physical thumbnail averages dots rather than subsampling binary cells");
+            True(Enumerable.Range(0, thumbnail.Width * thumbnail.Height).Any(i => thumbnail.Pixels[4 * i + 3] is > 0 and < 255),
+                "physical thumbnail averages mask edge coverage");
+            Equal((byte)0, thumbnail.Pixels[(256 * 512 + 256) * 4 + 3], "thumbnail keeps center hole transparent");
+
+            // A gradient crosses tile boundaries and the disc mask; every partially
+            // filled block must preserve its count, not just the whole-disc average.
+            RasterCodec.SavePng(source, 129, 129,
+                Enumerable.Range(0, 129 * 129).Select(i => (byte)(24 + i % 129 * 208 / 128)).ToArray(), true);
+            var gradientRequest = request with { CanvasRadiusMm = 16, OuterRadiusMm = 16 };
+            baseline = PhysicalImaging.DvdPhysicalConversion.Prepare(gradientRequest, cache);
+            var refined = PhysicalImaging.DvdPhysicalConversion.Prepare(gradientRequest with
+                { Settings = settings with { Passes = 4 } }, cache);
+            var before = RasterCodec.LoadBgra32(baseline.MaskedPath!);
+            var after = RasterCodec.LoadBgra32(refined.MaskedPath!);
+            int block = PhysicalImaging.PhysicalRefinement.DensityBlockSize;
+            for (int top = 0; top < before.Height; top += block)
+                for (int left = 0; left < before.Width; left += block)
+                {
+                    int countBefore = 0, countAfter = 0;
+                    for (int y = top; y < Math.Min(top + block, before.Height); y++)
+                        for (int x = left; x < Math.Min(left + block, before.Width); x++)
+                        {
+                            int i = (y * before.Width + x) * 4;
+                            Equal(before.Pixels[i + 3], after.Pixels[i + 3], "refinement preserves mask");
+                            if (before.Pixels[i + 3] == 0) continue;
+                            countBefore += before.Pixels[i] / 255; countAfter += after.Pixels[i] / 255;
+                        }
+                    Equal(countBefore, countAfter, "physical refinement preserves each local gray density");
+                }
+            using var report = System.Text.Json.JsonDocument.Parse(File.ReadAllText(refined.ReportPath));
+            True(report.RootElement.GetProperty("optimizationAcceptedReduction").EnumerateArray().Sum(x => x.GetDouble()) > 0,
+                "density-preserving refinement actually improves the objective");
+        }
+        finally { Directory.Delete(directory, true); }
+
+        static double Density(PhysicalImaging.DvdPhysicalConversionResult result)
+        {
+            var raster = RasterCodec.LoadBgra32(result.MaskedPath!);
+            int active = 0, white = 0;
+            for (int i = 0; i < raster.Pixels.Length; i += 4)
+                if (raster.Pixels[i + 3] != 0) { active++; white += raster.Pixels[i] / 255; }
+            return (double)white / active;
+        }
+    }
+
+    private static void TestPhysicalCalibrationProjection()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "physical-projection-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string source = Path.Combine(directory, "checker.png");
+            byte[] pixels = new byte[65 * 65 * 4];
+            for (int y = 0; y < 65; y++) for (int x = 0; x < 65; x++)
+            {
+                int i = (y * 65 + x) * 4;
+                pixels[i] = pixels[i + 1] = pixels[i + 2] = (byte)(((x + y) % 2) * 255);
+                pixels[i + 3] = x < 8 ? (byte)0 : (byte)255;
+            }
+            RasterCodec.SavePng(source, 65, 65, pixels, false);
+            var options = new CalibrationPreviewOptions(4096, 0, 4096, 24.5, 58, 24.5, 58,
+                133.3, true, 128, 1, 64, 64, Tone: ToneProfile.Photo with { Brightness = 64 }, PhysicalBinary: true);
+            string first = Path.Combine(directory, "first.png"), again = Path.Combine(directory, "again.png");
+            CalibrationPreviewRenderer.Render(source, first, options);
+            CalibrationPreviewRenderer.Render(source, again, options with { Tone = ToneProfile.LegacyBinary });
+            True(File.ReadAllBytes(first).SequenceEqual(File.ReadAllBytes(again)),
+                "physical calibration never reapplies legacy brightness or dithering");
+            True(CountIntermediateOpaquePixels(first) > 100, "calibration spatially averages physical dots");
+            string gray = Path.Combine(directory, "gray.png");
+            RasterCodec.SavePng(gray, 65, 65, Enumerable.Repeat((byte)128, 65 * 65).ToArray(), true);
+            bool rejected = false;
+            try { CalibrationPreviewRenderer.Render(gray, again, options); }
+            catch (ArgumentException) { rejected = true; }
+            True(rejected, "physical calibration rejects an unconverted grayscale source");
+        }
+        finally { Directory.Delete(directory, true); }
     }
 
     private static void TestTables()

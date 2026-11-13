@@ -31,7 +31,7 @@
                  bitmap so custom radii and file regions retain their physical bounds. -->
             <Grid x:Name="PreviewImageHost" Width="128" Height="128"
                   HorizontalAlignment="Center" VerticalAlignment="Center">
-                <Image x:Name="PreviewDisc" Source="{Binding TonePreviewImage}" Stretch="Uniform">
+                <Image x:Name="PreviewDisc" Source="{Binding TonePreviewImage}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality">
                     <Image.Style>
                         <Style TargetType="Image">
                             <Setter Property="Visibility" Value="Collapsed" />
@@ -73,6 +73,23 @@
         </Border>
 
         <StackPanel x:Name="ToneControls" Grid.Row="2" Grid.Column="0" Margin="0,14,0,0">
+            <controls:VisibilityGate IsOpen="{Binding IsDvd}">
+                <StackPanel>
+                    <CheckBox Content="物理优化（实验模型）" IsChecked="{Binding State.DvdPhysicalEnabled}" />
+                    <TextBlock Text="保留照片灰阶，优化抖动点的位置。完整计算后用于导出和刻录；材料参数尚未实盘验证。" TextWrapping="Wrap" />
+                    <Button Style="{StaticResource CompactButton}" Content="导入材料与灯位配置" Command="{Binding ImportPhysicalProfileCommand}" />
+                    <TextBlock Text="网格尺寸（微米）" />
+                    <ComboBox ItemsSource="{Binding PhysicalCellChoices}" IsEditable="True" Text="{Binding State.DvdPhysicalCellUm}" />
+                    <TextBlock Text="查看结果" />
+                    <ComboBox ItemsSource="{Binding PhysicalPreviewChoices}" DisplayMemberPath="Name" SelectedValuePath="Value"
+                              SelectedValue="{Binding State.DvdPhysicalPreviewIndex}" />
+                    <Expander Header="材料与灯位配置 JSON（留空使用实验模型）">
+                        <TextBox Text="{Binding State.DvdPhysicalProfileJson, UpdateSourceTrigger=LostFocus}"
+                                 AcceptsReturn="True" Height="160" VerticalScrollBarVisibility="Auto" />
+                    </Expander>
+                </StackPanel>
+            </controls:VisibilityGate>
+            <StackPanel IsEnabled="{Binding IsLegacyToneEnabled}">
             <Grid>
                 <TextBlock Style="{StaticResource FieldLabel}" Margin="0" Text="{loc:Text Xaml.Dithering}" />
                 <TextBlock Style="{StaticResource RowText}" HorizontalAlignment="Right"
@@ -118,12 +135,14 @@
                 </StackPanel>
             </controls:VisibilityGate>
 
+            </StackPanel>
             <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                 <Button Style="{StaticResource CompactButton}" Content="{loc:Text Xaml.ResetDefaults}"
                         Command="{Binding ResetToneCommand}" />
-                <Button Style="{StaticResource CompactButton}" Content="{loc:Text Xaml.RefreshPreview}"
+                <Button x:Name="RefreshTonePreviewButton" Style="{StaticResource CompactButton}" Content="{loc:Text Xaml.RefreshPreview}"
                         Command="{Binding RefreshTonePreviewCommand}" Margin="8,0,0,0" />
             </StackPanel>
+            <TextBlock Text="{Binding TonePreviewStatus}" Style="{StaticResource CompactHint}" Margin="0,6,0,0" TextWrapping="Wrap" />
         </StackPanel>
     </Grid>
 </UserControl>

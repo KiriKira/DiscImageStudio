@@ -18,7 +18,9 @@ public sealed record ImageMappingOptions(
     double PitchCubic = 0,
     ToneProfile? Tone = null,
     uint? UsableSectors = null,
-    double? ImageOuterRadiusMm = null)
+    double? ImageOuterRadiusMm = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    bool PhysicalBinary = false)
 {
     public uint OutputSectors => UsableSectors ?? TotalSectors;
     public double SamplingOuterRadiusMm => ImageOuterRadiusMm ?? OuterRadiusMm;
@@ -60,7 +62,7 @@ internal static class ImageTargetMapper
         string imagePath,
         uint initialLba,
         ImageMappingOptions options)
-        => Map(RasterImage.Load(imagePath), initialLba, options, Path.GetFullPath(imagePath));
+        => Map(RasterImage.Load(imagePath, options.PhysicalBinary), initialLba, options, Path.GetFullPath(imagePath));
 
     internal static ImageConstraint Map(
         RasterImage image,

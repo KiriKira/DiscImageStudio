@@ -4,6 +4,9 @@
 
 ### 中文
 
+- DVD新增默认关闭的原生物理优化实验模式：有限光源/光谱反射模型、多条件反演、物理误差扩散和多尺度局部优化；设计页可导入模型、选择精度并手动刷新，导出与刻录前共用缓存结果。启用时保存schema 3参数快照；新增转换和标靶CLI。材料效果尚待实盘验证。
+
+- 新增独立实验工具 `tools/PhysicalDither`：用受反射能量上限与互易性约束的有效纹理模型，求多灯位灰阶混合比例并在盘面物理坐标上扩散反射亮度误差，输出供现有 DVD dispersion 路径使用的二值 PNG；附带参数为假设值，尚无实盘效果验证，不改变应用默认转换。
 - Windows 应用宿主设置 `CetCompat=false`，作为 #229 所报启动失败的兼容性处理；这会降低该应用进程的硬件影子栈保护，不修改系统级安全设置。受影响原机上的启动结果仍待验证。
 - 新增 Windows ARM64 自包含单文件 EXE；Windows x64 与 ARM64 分别在原生 runner 上构建并对最终发布文件执行自检、音轨生成和 GUI 截图检查，Release 复用这些已测试制品。ARM64 使用 Windows 11，CI 仅覆盖软件检查，尚未验证实盘刻录。
 - 设计页支持从资源管理器拖入单张或多张图片。
@@ -13,6 +16,9 @@
 
 ### English
 
+- Add opt-in native DVD physical conversion: finite-source spectral reflection, multi-condition mixture fitting, radiance-error diffusion and multiscale local refinement. The design page imports profiles and explicitly refreshes full results; export and pre-burn preparation share cached output. Enabled projects persist schema 3 snapshots; CLI conversion and calibration-target commands are available. Physical material results remain unverified.
+
+- Add the standalone experimental `tools/PhysicalDither` preprocessor: a passive reciprocal effective texture model, multi-condition mixture fitting, and physical-coordinate radiance-error diffusion produce binary PNGs for the existing DVD dispersion path. Bundled material parameters are hypothetical; physical-disc results are unverified and application defaults are unchanged.
 - Set `CetCompat=false` on the Windows application host as a compatibility workaround for the startup failure reported in #229. This reduces hardware shadow-stack protection for this application process without changing system-wide security settings. Startup on the affected original machine still needs verification.
 - Add a self-contained single-file Windows ARM64 EXE. Windows x64 and ARM64 builds run on native runners and check the final executables with self-tests, audio-track generation and GUI snapshots; releases reuse those tested artifacts. ARM64 uses Windows 11. CI covers software checks only; physical disc burning on ARM64 remains unverified.
 - Import one or multiple images by dragging files from Explorer onto the design page, using the same layer fitting and failure messages as the import button. Folders and unrelated files are ignored, and imports are disabled while a job is running.

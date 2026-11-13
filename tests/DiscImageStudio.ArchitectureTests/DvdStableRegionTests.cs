@@ -161,7 +161,7 @@ internal static class DvdStableRegionTests
         }
         Type type = SolverAssembly.GetType("DvdImageSolver.Solver.RasterImage")!;
         return Activator.CreateInstance(type, BindingFlags.Instance | BindingFlags.NonPublic, null,
-            [width, height, pixels], null)!;
+            [width, height, pixels, false], null)!;
     }
 
     private static (double X, double Y) Physical(double x, double y, int width, int height, double outer)

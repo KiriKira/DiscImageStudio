@@ -12,6 +12,25 @@ internal static class ProjectSession
 {
     public static void ApplyToState(ProjectDocument document, DiscParametersState state)
     {
+        if (document.ModuleSettings?.Keys.Any(key => key != "dvd-physical") == true)
+            throw new ArgumentException("This application cannot interpret these module settings.");
+        DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings? physicalSettings = null;
+        string physicalJson = "";
+        if (document.ModuleSettings?.TryGetValue("dvd-physical", out var physical) == true)
+        {
+            if (!document.IsDvd) throw new ArgumentException("Physical DVD settings require a DVD project.");
+            physicalJson = physical.GetRawText();
+            physicalSettings = System.Text.Json.JsonSerializer.Deserialize<DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings>(
+                physicalJson, DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.JsonOptions)
+                ?? throw new ArgumentException("Empty physical settings.");
+            physicalSettings.Validate();
+        }
+        // Validate module snapshots before touching the currently open project's state.
+        state.DvdPhysicalEnabled = false;
+        state.DvdPhysicalProfileJson = physicalJson;
+        state.DvdPhysicalCellUm = physicalSettings?.CellUm ?? 20;
+        state.DvdPhysicalPreviewIndex = -1;
+        state.DvdPhysicalEnabled = physicalSettings is not null;
         ProjectGeometry geometry = document.Geometry;
         ProjectOutputs outputs = document.Outputs;
         string inner = Format(geometry.InnerRadiusMm);

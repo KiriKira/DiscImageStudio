@@ -838,7 +838,58 @@ public partial class DesignViewModel : ObservableObject
 
     /// <summary>Renders (or reuses) the export-quality composite for a generation job.
     /// Throws when there is nothing to compose.</summary>
-    public async Task<string> EnsureExportCompositeAsync()
+    public async Task<string> EnsureExportCompositeAsync(CancellationToken cancellationToken = default,
+        IProgress<double>? physicalProgress = null)
+    {
+        string source = await EnsureRawExportCompositeAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+        return IsDvd ? await PrepareDvdPhysicalSourceAsync(source, cancellationToken, physicalProgress) : source;
+    }
+
+    // Shared by design, calibration, export and burn. Calibration may also supply
+    // a standalone square source when there are no design layers.
+    internal async Task<string> PrepareDvdPhysicalSourceAsync(string source, CancellationToken cancellationToken,
+        IProgress<double>? physicalProgress = null)
+    {
+        if (_state.PhysicalSettings is not { } settings) return source;
+        string Identity() => string.Join("|", _compositeRevision, _state.DvdPhysicalEnabled, _state.DvdPhysicalProfileJson,
+            _state.DvdPhysicalCellUm, _state.DvdTotalSectors, _state.DvdInnerRadius, _state.DvdOuterRadius,
+            _state.DvdPitchLinear, _state.DvdPitchQuadratic, _state.DvdPitchCubic,
+            _state.GetUsableSectors(OpticalDiscFamily.Dvd), _state.DvdReadCompatibility,
+            _state.DvdDataDirectory, _state.DvdVolumeLabel, _state.DvdFilesAtOuterRing);
+        string identity = Identity();
+        DvdStreamingOptions options = new(
+            uint.Parse(_state.DvdTotalSectors, CultureInfo.InvariantCulture),
+            double.Parse(_state.DvdInnerRadius, CultureInfo.InvariantCulture),
+            double.Parse(_state.DvdOuterRadius, CultureInfo.InvariantCulture),
+            PitchLinear: double.Parse(_state.DvdPitchLinear, CultureInfo.InvariantCulture),
+            PitchQuadratic: double.Parse(_state.DvdPitchQuadratic, CultureInfo.InvariantCulture),
+            PitchCubic: double.Parse(_state.DvdPitchCubic, CultureInfo.InvariantCulture),
+            UsableSectors: checked((uint)_state.GetUsableSectors(OpticalDiscFamily.Dvd)),
+            ReadCompatibility: _state.DvdReadCompatibility);
+        string directory = _state.DvdDataDirectory.Trim();
+        string volumeLabel = _state.ResolveVolumeLabel(OpticalDiscFamily.Dvd);
+        bool outerFiles = directory.Length > 0 && _state.DvdFilesAtOuterRing;
+        if (cancellationToken.CanBeCanceled)
+        {
+            var result = await Task.Run(() => DvdPhysicalPreparation.Prepare(source, options, settings, directory,
+                volumeLabel, outerFiles, cancellationToken, (_, fraction) => physicalProgress?.Report(fraction)), cancellationToken);
+            if (identity != Identity()) throw new OperationCanceledException("Physical inputs changed during conversion.");
+            return result.MaskedPath ?? result.BinaryPath;
+        }
+        DvdImageSolver.PhysicalImaging.DvdPhysicalConversionResult? prepared = null;
+        bool completed = await _shell.RunImageJobAsync(L.T("正在计算物理转换…"), source, (progress, token) =>
+        {
+            prepared = DvdPhysicalPreparation.Prepare(source, options, settings, directory, volumeLabel, outerFiles,
+                token, (stage, fraction) => progress.Report(new("dvd", "physical", stage, fraction)));
+            return new DiscImageResult(prepared.MaskedPath ?? prepared.BinaryPath, L.T("物理转换完成（实验模型）。"));
+        });
+        if (!completed || prepared is null) throw new OperationCanceledException("Physical preparation did not complete.");
+        if (identity != Identity()) throw new OperationCanceledException("Physical inputs changed during conversion.");
+        return prepared.MaskedPath ?? prepared.BinaryPath;
+    }
+
+    private async Task<string> EnsureRawExportCompositeAsync()
     {
         if (!HasLayers)
         {

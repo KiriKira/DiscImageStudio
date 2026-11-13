@@ -620,6 +620,13 @@ public partial class LivePreviewViewModel : ObservableObject
         _livePreviewRevision++;
         _isLivePreviewReady = false;
         StatusText = L.T("参数已变化，准备刷新…");
+        if (SelectedFamily == OpticalDiscFamily.Dvd && IsCalibrationPreview && _state.DvdPhysicalEnabled
+            && _shell.CurrentWorkspace != Workspace.Preview)
+        {
+            // Physical preparation is expensive: do not launch it behind the design page.
+            StatusText = L.T("物理抖动待计算，请在预览页刷新。");
+            return;
+        }
         _livePreviewTimer.Start();
     }
 
@@ -948,12 +955,30 @@ public partial class LivePreviewViewModel : ObservableObject
             return;
         }
 
+        string displaySource = imagePath;
+        bool physical = _state.DvdPhysicalEnabled;
+        bool preparingPhysical = false;
         int outputSize = options.PreviewSize;
         int samplesPerSector = options.SamplesPerSector;
         StatusText = L.F($"正在刷新 {outputSize} px DVD 标定预览…");
         bool keepOutput = false;
         try
         {
+            if (physical)
+            {
+                preparingPhysical = true;
+                var progress = new Progress<double>(fraction =>
+                {
+                    if (preparingPhysical && revision == _livePreviewRevision && !cancellationToken.IsCancellationRequested)
+                        StatusText = L.F($"正在计算物理抖动… {fraction * 100:0}%");
+                });
+                imagePath = _shell.Design.HasLayers
+                    ? await _shell.Design.EnsureExportCompositeAsync(cancellationToken, progress)
+                    : await _shell.Design.PrepareDvdPhysicalSourceAsync(imagePath, cancellationToken, progress);
+                preparingPhysical = false;
+                cancellationToken.ThrowIfCancellationRequested();
+                StatusText = L.F($"正在投影物理抖动… {outputSize} px");
+            }
             outputPath = TempFiles.GetCacheFilePath($"dvd-live-warp-{revision}.png");
             DvdStreamingOptions actual = ReadDvdPreviewGeometry(calibration: true);
             await StaWorker.RunAsync(() =>
@@ -971,9 +996,10 @@ public partial class LivePreviewViewModel : ObservableObject
                 return;
             }
 
-            PublishPreview(outputPath, imagePath, L.T("预览 - DVD"), filePlan is not null);
+            PublishPreview(outputPath, displaySource, L.T("预览 - DVD"), filePlan is not null);
             keepOutput = true;
-            SetReadyStatus(() => L.F($"已实时更新 · 标定预览 · CW · 抖动 {_state.DvdTone.DitherStrength * 100:0}%")
+            SetReadyStatus(() => (physical ? L.T("已实时更新 · 标定预览 · CW · 物理抖动")
+                : L.F($"已实时更新 · 标定预览 · CW · 抖动 {options.Tone?.DitherStrength * 100:0}%"))
                 + L.F($" · {outputSize} px · 每扇区 {samplesPerSector} 个采样"));
         }
         catch (OperationCanceledException)
@@ -986,6 +1012,7 @@ public partial class LivePreviewViewModel : ObservableObject
         }
         finally
         {
+            preparingPhysical = false;
             if (!keepOutput)
             {
                 TempFiles.TryDeleteTemporaryFile(outputPath);
@@ -1522,7 +1549,8 @@ public partial class LivePreviewViewModel : ObservableObject
                 ParameterParser.ParseDouble(_state.DvdActualPitchQuadratic, L.T("相对二次项")),
                 ParameterParser.ParseDouble(_state.DvdActualPitchCubic, L.T("相对三次项")), tone,
                 SourceImageOuterRadiusMm: ReadDvdPreviewGeometry(false).OutputOuterRadiusMm,
-                PreviewOuterRadiusMm: ReadDvdPreviewGeometry(true).OutputOuterRadiusMm);
+                PreviewOuterRadiusMm: ReadDvdPreviewGeometry(true).OutputOuterRadiusMm,
+                PhysicalBinary: _state.DvdPhysicalEnabled);
             message = string.Empty;
             return true;
         }

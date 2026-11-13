@@ -6,12 +6,14 @@ internal sealed class RasterImage
 {
     private readonly byte[] _bgra;
 
-    private RasterImage(int width, int height, byte[] bgra)
+    private RasterImage(int width, int height, byte[] bgra, bool physicalBinary = false)
     {
         Width = width;
         Height = height;
         _bgra = bgra;
-        HasBinaryGrayscalePalette = IsOpaqueBinaryGrayscale(bgra);
+        HasBinaryGrayscalePalette = IsOpaqueBinaryGrayscale(bgra, physicalBinary);
+        PhysicalBinary = physicalBinary;
+        if (physicalBinary && !HasBinaryGrayscalePalette) throw new ArgumentException("Physical input must contain binary grayscale and binary alpha.");
     }
 
     internal int Width { get; }
@@ -19,11 +21,12 @@ internal sealed class RasterImage
     internal int Height { get; }
 
     internal bool HasBinaryGrayscalePalette { get; }
+    internal bool PhysicalBinary { get; }
 
-    internal static RasterImage Load(string path)
+    internal static RasterImage Load(string path, bool physicalBinary = false)
     {
         var raster = RasterCodec.LoadBgra32(path);
-        return new RasterImage(raster.Width, raster.Height, raster.Pixels);
+        return new RasterImage(raster.Width, raster.Height, raster.Pixels, physicalBinary);
     }
 
     internal static RasterImage CreateForTest(int width, int height, byte blue, byte green, byte red, byte alpha)
@@ -54,11 +57,11 @@ internal sealed class RasterImage
         // An already dithered image encodes brightness as the spatial proportion
         // of its discrete pixels. Interpolation would invent intermediate tones
         // and requantization would change those proportions.
-        if (preserveDiscreteGrayscale && HasBinaryGrayscalePalette)
+        if ((preserveDiscreteGrayscale || PhysicalBinary) && HasBinaryGrayscalePalette)
         {
             int x = (int)Math.Floor(pixelX + 0.5);
             int y = (int)Math.Floor(pixelY + 0.5);
-            return new PixelSample(_bgra[((y * Width) + x) * 4], 255);
+            return new PixelSample(_bgra[((y * Width) + x) * 4], _bgra[((y * Width) + x) * 4 + 3]);
         }
 
         int x0 = (int)Math.Floor(pixelX);
@@ -231,12 +234,12 @@ internal sealed class RasterImage
         return true;
     }
 
-    private static bool IsOpaqueBinaryGrayscale(ReadOnlySpan<byte> pixels)
+    private static bool IsOpaqueBinaryGrayscale(ReadOnlySpan<byte> pixels, bool allowTransparent = false)
     {
         for (int offset = 0; offset < pixels.Length; offset += 4)
         {
             byte value = pixels[offset];
-            if (pixels[offset + 3] != 255
+            if ((pixels[offset + 3] != 255 && !(allowTransparent && pixels[offset + 3] == 0))
                 || pixels[offset + 1] != value
                 || pixels[offset + 2] != value
                 || (value != 0 && value != 255))

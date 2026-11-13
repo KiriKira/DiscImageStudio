@@ -25,7 +25,8 @@ public sealed record DvdStreamingOptions(
     bool ReadCompatibility = false,
     uint? UsableSectors = null,
     double? SourceImageOuterRadiusMm = null,
-    string ReadCompatibilityMode = DvdReadCompatibilityModes.Current)
+    string ReadCompatibilityMode = DvdReadCompatibilityModes.Current,
+    bool PhysicalBinary = false)
 {
     /// <summary>Physical channel-bit length of the DVD scheme; the UI no longer exposes it.</summary>
     public const double StandardChannelBitLengthNm = 133.3;
@@ -405,7 +406,8 @@ public static class DvdStreamingGenerator
             Tone: options.Tone,
             UsableSectors: options.UsableSectors,
             ImageOuterRadiusMm: options.SourceImageOuterRadiusMm
-                ?? (options.UsableSectors.HasValue ? options.OutputOuterRadiusMm : null));
+                ?? (options.UsableSectors.HasValue ? options.OutputOuterRadiusMm : null),
+            PhysicalBinary: options.PhysicalBinary);
         return new MultiBlockSolveOptions(
             startLba,
             fillSectors,

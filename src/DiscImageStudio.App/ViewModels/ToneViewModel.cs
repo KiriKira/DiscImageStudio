@@ -39,12 +39,14 @@ public partial class ToneViewModel : ObservableObject
     // failure with the idle hint, so the current phase is kept next to the ready flag.
     private bool _tonePreviewRendering;
     private string? _tonePreviewError;
+    private int _physicalProgressPercent;
 
     public ToneViewModel(ShellViewModel shell, DiscParametersState state, DesignViewModel design)
     {
         _shell = shell;
         _state = state;
         _design = design;
+        ImportPhysicalProfileCommand = new RelayCommand(ImportPhysicalProfile);
         ResetToneCommand = new RelayCommand(ResetTone, () => _shell.IsProjectOpen);
         RefreshTonePreviewCommand = new RelayCommand(
             RefreshTonePreviewNow,
@@ -63,6 +65,23 @@ public partial class ToneViewModel : ObservableObject
     public bool IsCd => _design.IsCd;
 
     public bool IsDvd => _design.IsDvd;
+    public bool IsLegacyToneEnabled => !IsDvd || !_state.DvdPhysicalEnabled;
+    public sealed record PhysicalPreviewChoice(string Name, int Value);
+    public double[] PhysicalCellChoices { get; } = [20, 40, 80];
+    public IReadOnlyList<PhysicalPreviewChoice> PhysicalPreviewChoices
+    {
+        get
+        {
+            List<PhysicalPreviewChoice> choices = [new(L.T("抖动灰阶（面积平均）"), -1), new(L.T("响应与影调受限区域"), -2)];
+            try
+            {
+                if (_state.PhysicalSettings is { } settings)
+                    choices.AddRange(settings.Views.Select((view, index) => new PhysicalPreviewChoice(view.Name, index)));
+            }
+            catch (Exception exception) when (exception is ArgumentException or System.Text.Json.JsonException) { }
+            return choices;
+        }
+    }
 
     public bool IsBluRay => _design.IsBluRay;
 
@@ -88,7 +107,9 @@ public partial class ToneViewModel : ObservableObject
     {
         if (_tonePreviewRendering)
         {
-            return L.T("正在按当前影调渲染…");
+            return IsDvd && _state.DvdPhysicalEnabled
+                ? L.F($"正在计算物理抖动… {_physicalProgressPercent}%")
+                : L.T("正在按当前影调渲染…");
         }
 
         if (_tonePreviewError is { } error)
@@ -96,7 +117,32 @@ public partial class ToneViewModel : ObservableObject
             return L.F($"影调预览失败：{error}");
         }
 
+        if (IsDvd && _state.DvdPhysicalEnabled && _compositePath is not null)
+            return _tonePreviewReady ? L.T("物理抖动已就绪") : L.T("物理优化参数已变更，请重新计算完整结果。");
         return _tonePreviewReady ? L.T("实时更新") : L.T("导入图片后自动生成预览。");
+    }
+
+    public RelayCommand ImportPhysicalProfileCommand { get; }
+    private void ImportPhysicalProfile()
+    {
+        string? path = _shell.Dialogs?.PickOpen(L.T("导入材料与灯位配置"), L.T("JSON 配置|*.json"));
+        if (path is null) return;
+        try
+        {
+            var settings = System.Text.Json.JsonSerializer.Deserialize<DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings>(
+                File.ReadAllText(path), DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.JsonOptions)
+                ?? throw new ArgumentException(L.T("配置为空。"));
+            settings.Validate();
+            _state.DvdPhysicalProfileJson = System.Text.Json.JsonSerializer.Serialize(settings,
+                DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.JsonOptions);
+            _state.DvdPhysicalCellUm = settings.CellUm;
+            _state.DvdPhysicalEnabled = true;
+            _state.DvdPhysicalPreviewIndex = -1;
+        }
+        catch (Exception exception) when (exception is ArgumentException or System.Text.Json.JsonException or IOException or UnauthorizedAccessException)
+        {
+            _shell.ShowToast(L.T("配置导入失败"), exception.Message, ToastKind.Error);
+        }
     }
 
     public RelayCommand ResetToneCommand { get; }
@@ -111,6 +157,7 @@ public partial class ToneViewModel : ObservableObject
         {
             OnPropertyChanged(nameof(IsCd));
             OnPropertyChanged(nameof(IsDvd));
+        OnPropertyChanged(nameof(IsLegacyToneEnabled));
             OnPropertyChanged(nameof(IsBluRay));
             ResetToneCommand.NotifyCanExecuteChanged();
             RefreshTonePreviewCommand.NotifyCanExecuteChanged();
@@ -142,7 +189,16 @@ public partial class ToneViewModel : ObservableObject
 
     private void State_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(DiscParametersState.ToneDitherStrength)
+        if (e.PropertyName is nameof(DiscParametersState.DvdPhysicalEnabled) or nameof(DiscParametersState.DvdPhysicalProfileJson))
+        {
+            OnPropertyChanged(nameof(PhysicalPreviewChoices));
+            OnPropertyChanged(nameof(IsLegacyToneEnabled));
+        }
+        if (e.PropertyName is nameof(DiscParametersState.DvdPhysicalEnabled)
+            or nameof(DiscParametersState.DvdPhysicalProfileJson)
+            or nameof(DiscParametersState.DvdPhysicalPreviewIndex)
+            or nameof(DiscParametersState.DvdPhysicalCellUm)
+            or nameof(DiscParametersState.ToneDitherStrength)
             or nameof(DiscParametersState.ToneLevels)
             or nameof(DiscParametersState.ToneBrightness)
             or nameof(DiscParametersState.ToneSrgbLinearization)
@@ -210,10 +266,21 @@ public partial class ToneViewModel : ObservableObject
         {
             ScheduleTonePreview();
         }
+        else if (IsDvd && _state.DvdPhysicalEnabled && _tonePreviewRendering)
+        {
+            // The preview page will reuse the same preparation; stop offscreen work.
+            InvalidateTonePreview(clearSource: false);
+        }
     }
 
     private void ScheduleTonePreview()
     {
+        if (IsDvd && _state.DvdPhysicalEnabled)
+        {
+            // Invalidate the result, not the input needed by the manual refresh command.
+            InvalidateTonePreview(clearSource: false);
+            return;
+        }
         if (!_shell.IsProjectOpen
             || _shell.CurrentWorkspace != Workspace.Design
             || _compositePath is null)
@@ -249,6 +316,7 @@ public partial class ToneViewModel : ObservableObject
     private void BeginTonePreview()
     {
         _tonePreviewReady = false;
+        _physicalProgressPercent = 0;
         _tonePreviewRendering = true;
         _tonePreviewError = null;
         TonePreviewStatus = ComposeTonePreviewStatus();
@@ -275,9 +343,26 @@ public partial class ToneViewModel : ObservableObject
             enteredGate = true;
             cancellationToken.ThrowIfCancellationRequested();
 
+            if (IsDvd && _state.DvdPhysicalEnabled)
+            {
+                var progress = new Progress<double>(fraction =>
+                {
+                    if (revision != _tonePreviewRevision || !_tonePreviewRendering || cancellationToken.IsCancellationRequested) return;
+                    _physicalProgressPercent = (int)Math.Round(100 * fraction);
+                    TonePreviewStatus = ComposeTonePreviewStatus();
+                });
+                sourcePath = await _design.EnsureExportCompositeAsync(cancellationToken, progress);
+            }
             int samplesPerSector;
             bool hasFileRegionOverlay;
-            if (IsBluRay)
+            if (IsDvd && _state.DvdPhysicalEnabled)
+            {
+                string name = _state.DvdPhysicalPreviewIndex == -1 ? "density.png" : _state.DvdPhysicalPreviewIndex == -2 ? "diagnostic.png" : $"view-{_state.DvdPhysicalPreviewIndex}.png";
+                File.Copy(Path.Combine(Path.GetDirectoryName(sourcePath)!, name), outputPath, true);
+                samplesPerSector = 0;
+                hasFileRegionOverlay = false;
+            }
+            else if (IsBluRay)
             {
                 BluRayDiscParameters parameters = ReadBluRayPreviewParameters();
                 bool invert = _state.BdInvertMapping;
@@ -445,12 +530,14 @@ public partial class ToneViewModel : ObservableObject
         }
     }
 
-    private void ClearTonePreview()
+    private void ClearTonePreview() => InvalidateTonePreview(clearSource: true);
+
+    private void InvalidateTonePreview(bool clearSource)
     {
         _tonePreviewCancellation?.Cancel();
         _tonePreviewCancellation?.Dispose();
         _tonePreviewCancellation = null;
-        _compositePath = null;
+        if (clearSource) _compositePath = null;
         RefreshTonePreviewCommand.NotifyCanExecuteChanged();
         // A render that is still in flight belongs to the discarded state; bumping the
         // revision keeps its completion from writing the status back.

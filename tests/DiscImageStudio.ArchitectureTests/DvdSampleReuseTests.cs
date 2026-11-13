@@ -106,7 +106,7 @@ internal static class DvdSampleReuseTests
         else
         {
             Type rasterType = typeof(FastDispersionImageWriter).Assembly.GetType("DvdImageSolver.Solver.RasterImage", true)!;
-            object raster = rasterType.GetMethod("Load", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [imagePath])!;
+            object raster = rasterType.GetMethod("Load", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [imagePath, false])!;
             arguments = [raster, options.ImageMapping];
         }
         object sampler = Activator.CreateInstance(samplerType, BindingFlags.Instance | BindingFlags.NonPublic,

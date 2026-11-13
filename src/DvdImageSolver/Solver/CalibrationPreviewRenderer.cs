@@ -26,7 +26,9 @@ public sealed record CalibrationPreviewOptions(
     double ActualPitchCubic = 0,
     ToneProfile? Tone = null,
     double? SourceImageOuterRadiusMm = null,
-    double? PreviewOuterRadiusMm = null);
+    double? PreviewOuterRadiusMm = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    bool PhysicalBinary = false);
 
 public sealed record CalibrationPreviewSummary(
     string SourceImage,
@@ -80,7 +82,7 @@ public static class CalibrationPreviewRenderer
         Validate(options);
         string sourceFullPath = Path.GetFullPath(imagePath);
         string outputFullPath = Path.GetFullPath(outputPath);
-        RasterImage source = RasterImage.Load(sourceFullPath);
+        RasterImage source = RasterImage.Load(sourceFullPath, options.PhysicalBinary);
         double trackLengthMm = options.TotalSectors
             * (double)DvdEccBlockEncoder.ChannelBitsPerSector
             * options.ChannelBitLengthNm
@@ -171,7 +173,7 @@ public static class CalibrationPreviewRenderer
                 }
 
                 int pixelIndex = (pixelY * size) + pixelX;
-                int binaryLevel = DvdToneMapping.UseWhite(
+                int binaryLevel = options.PhysicalBinary ? sample.Luminance : DvdToneMapping.UseWhite(
                     sample.Luminance,
                     options.LuminanceThreshold,
                     options.Tone,

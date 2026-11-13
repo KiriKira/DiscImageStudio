@@ -15,6 +15,13 @@ public sealed class DvdDiscModule : IOpticalDiscModule
         SupportsCancellation: false,
         Commands:
         [
+            new DiscCommandDescriptor("dvd-physical-target", "Physical calibration target", "Generate texture mixture panels and a measurement template.",
+                DiscModuleCapabilities.DataImageGeneration, [new("output-dir", "Output directory", DiscOptionValueType.InputFolder, Required: true)]),
+            new DiscCommandDescriptor("dvd-physical-convert", "Physical DVD conversion (experimental)",
+                "Convert a square layout using an effective optical texture model.", DiscModuleCapabilities.DataImageGeneration,
+                [new("image", "Source layout", DiscOptionValueType.InputFile, Required: true),
+                 new("output-dir", "Cache directory", DiscOptionValueType.InputFolder, Required: true),
+                 new("profile", "Material and lighting JSON", DiscOptionValueType.InputFile)]),
             new DiscCommandDescriptor(
                 "solve",
                 "Generate DVD image",
@@ -112,6 +119,32 @@ public sealed class DvdDiscModule : IOpticalDiscModule
         string command,
         IReadOnlyList<string> arguments)
     {
+        if (command.Equals("solve", StringComparison.OrdinalIgnoreCase) && FindOption(arguments, "physical-profile") is { } profilePath)
+        {
+            string Need(string name) => FindOption(arguments, name) ?? throw new ArgumentException($"--{name} is required with --physical-profile.");
+            double Number(string name, double fallback) => FindOption(arguments, name) is { } value
+                ? double.Parse(value, System.Globalization.CultureInfo.InvariantCulture) : fallback;
+            var settings = System.Text.Json.JsonSerializer.Deserialize<DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings>(
+                File.ReadAllText(profilePath), DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.JsonOptions)
+                ?? throw new ArgumentException("Empty physical profile.");
+            var options = new DvdStreamingOptions(uint.Parse(Need("total-sectors"), System.Globalization.CultureInfo.InvariantCulture),
+                Number("inner-radius-mm", 24), Number("outer-radius-mm", 58),
+                ChannelBitLengthNm: Number("channel-bit-nm", 133.3),
+                PitchLinear: Number("pitch-linear", 0), PitchQuadratic: Number("pitch-quadratic", 0), PitchCubic: Number("pitch-cubic", 0),
+                ReadCompatibility: string.Equals(FindOption(arguments, "read-compatibility"), "true", StringComparison.OrdinalIgnoreCase));
+            var prepared = DvdPhysicalPreparation.Prepare(Need("image"), options, settings,
+                FindOption(arguments, "data-dir"), FindOption(arguments, "volume-label") ?? "DISC_IMAGE",
+                string.Equals(FindOption(arguments, "file-position"), "outer", StringComparison.OrdinalIgnoreCase));
+            HashSet<string> replaced = new(StringComparer.OrdinalIgnoreCase) { "physical-profile", "image", "tone-dither", "tone-gamma", "tone-brightness", "physical-binary" };
+            List<string> updated = [];
+            for (int i = 0; i < arguments.Count; i++)
+            {
+                if (replaced.Contains(arguments[i].TrimStart('-'))) { i++; continue; }
+                updated.Add(arguments[i]);
+            }
+            updated.AddRange(["--image", prepared.MaskedPath ?? prepared.BinaryPath, "--physical-binary", "true", "--tone-dither", "0", "--tone-gamma", "false", "--tone-brightness", "0"]);
+            arguments = updated;
+        }
         (string Key, string Value)[] fixedOptions = command.ToLowerInvariant() switch
         {
             "solve" =>

@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "provenance": {
+    "status": "hypothetical",
+    "description": "Illustrative passive texture model; NOT measured Verbatim AZO DVD-R 43523 parameters."
+  },
+  "track_pitch_nm": 740,
+  "canvas_radius_mm": 58,
+  "inner_radius_mm": 24.5,
+  "outer_radius_mm": 58,
+  "wavelengths": [[450, 0.2], [550, 0.6], [650, 0.2]],
+  "textures": [
+    {
+      "scrambled_q": "A5",
+      "diffuse": 0.025,
+      "specular": 0.30,
+      "diffraction": 0.12,
+      "specular_width": 0.045,
+      "diffraction_width_radial": 0.06,
+      "diffraction_width_tangent": 0.035
+    },
+    {
+      "scrambled_q": "92",
+      "diffuse": 0.08,
+      "specular": 0.35,
+      "diffraction": 0.08,
+      "specular_width": 0.045,
+      "diffraction_width_radial": 0.065,
+      "diffraction_width_tangent": 0.04
+    }
+  ],
+  "views": [
+    {
+      "name": "front-camera-right-lamp",
+      "weight": 1,
+      "camera_mm": [0, 0, 800],
+      "lights": [{"center_mm": [135, 0, 400], "size_mm": [30, 30], "samples_per_axis": 9, "radiance": 1}]
+    },
+    {
+      "name": "front-camera-top-lamp",
+      "weight": 1,
+      "camera_mm": [0, 0, 800],
+      "lights": [{"center_mm": [0, 135, 400], "size_mm": [30, 30], "samples_per_axis": 9, "radiance": 1}]
+    },
+    {
+      "name": "camera-offset-2-degrees",
+      "weight": 1,
+      "camera_mm": [27.94, 0, 800],
+      "lights": [{"center_mm": [135, 0, 400], "size_mm": [30, 30], "samples_per_axis": 9, "radiance": 1}]
+    }
+  ]
+}

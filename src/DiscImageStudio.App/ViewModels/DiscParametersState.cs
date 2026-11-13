@@ -155,6 +155,29 @@ public partial class DiscParametersState : ObservableObject
     [ObservableProperty] private DvdDiscPreset _selectedDvdPreset = ManualDvdPreset;
     [ObservableProperty] private BluRayDiscPreset _selectedBluRayPreset = ManualBluRayPreset;
 
+    [ObservableProperty]
+    private bool _dvdPhysicalEnabled;
+    [ObservableProperty]
+    private int _dvdPhysicalPreviewIndex = -1;
+    [ObservableProperty]
+    private double _dvdPhysicalCellUm = 20;
+    [ObservableProperty]
+    private string _dvdPhysicalProfileJson = "";
+    public DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings? PhysicalSettings
+    {
+        get
+        {
+            if (!DvdPhysicalEnabled) return null;
+            var value = string.IsNullOrWhiteSpace(DvdPhysicalProfileJson)
+                ? new DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings()
+                : System.Text.Json.JsonSerializer.Deserialize<DvdImageSolver.PhysicalImaging.DvdPhysicalConversionSettings>(
+                    DvdPhysicalProfileJson, DvdImageSolver.PhysicalImaging.DvdPhysicalConversion.JsonOptions)
+                  ?? throw new ArgumentException("Empty physical conversion settings.");
+            value = value with { CellUm = DvdPhysicalCellUm };
+            value.Validate(); return value;
+        }
+    }
+
     // Tone mapping shared by both families. New projects open at 75% dither: enough to keep
     // midtones at viewing distance without the grain full strength adds. A project file
     // written before tone mapping existed applies its absent section as 0, so old projects
@@ -194,7 +217,7 @@ public partial class DiscParametersState : ObservableObject
 
     /// <summary>DVD's dispersion pool has only the black and white textures; a CD project's
     /// 4-level setting must not leak into a DVD job.</summary>
-    public ToneProfile DvdTone => Tone with { Levels = ToneProfile.TwoLevels };
+    public ToneProfile DvdTone => DvdPhysicalEnabled ? ToneProfile.LegacyBinary : Tone with { Levels = ToneProfile.TwoLevels };
 
     /// <summary>BD runs a single binary pixel pipeline; intermediate CD levels do not apply.</summary>
     public ToneProfile BluRayTone => Tone with { Levels = ToneProfile.TwoLevels };
