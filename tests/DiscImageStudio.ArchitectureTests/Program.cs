@@ -46,6 +46,7 @@ if (args is ["--test-capacity-ui"])
 {
     DvdReadCompatibilityUiTests.Run();
     TonePreviewTests.Run();
+    PhysicalPreviewFlowTests.Run();
     AppCubicMediaTests.Run();
     CalibrationBurnSourceTests.Run();
     BurnJobDockTests.Run();
@@ -208,6 +209,7 @@ DvdReadCompatibilityIntegrationTests.Run();
 DvdReadCompatibilityUiTests.Run();
 ToneTests.Run();
 TonePreviewTests.Run();
+PhysicalPreviewFlowTests.Run();
 SaveTrailTests.Run();
 DvdCubicPipelineTests.Run();
 DvdFilePlacementTests.Run();

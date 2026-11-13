@@ -13,6 +13,7 @@ internal static class SelfTests
     {
         TestPhysicalConversion();
         TestPhysicalHalftoneTone();
+        TestPhysicalCalibrationProjection();
         TestTables();
         TestSy6Encoding();
         TestDataFrame();
@@ -163,6 +164,39 @@ internal static class SelfTests
                 if (raster.Pixels[i + 3] != 0) { active++; white += raster.Pixels[i] / 255; }
             return (double)white / active;
         }
+    }
+
+    private static void TestPhysicalCalibrationProjection()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "physical-projection-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string source = Path.Combine(directory, "checker.png");
+            byte[] pixels = new byte[65 * 65 * 4];
+            for (int y = 0; y < 65; y++) for (int x = 0; x < 65; x++)
+            {
+                int i = (y * 65 + x) * 4;
+                pixels[i] = pixels[i + 1] = pixels[i + 2] = (byte)(((x + y) % 2) * 255);
+                pixels[i + 3] = x < 8 ? (byte)0 : (byte)255;
+            }
+            RasterCodec.SavePng(source, 65, 65, pixels, false);
+            var options = new CalibrationPreviewOptions(4096, 0, 4096, 24.5, 58, 24.5, 58,
+                133.3, true, 128, 1, 64, 64, Tone: ToneProfile.Photo with { Brightness = 64 }, PhysicalBinary: true);
+            string first = Path.Combine(directory, "first.png"), again = Path.Combine(directory, "again.png");
+            CalibrationPreviewRenderer.Render(source, first, options);
+            CalibrationPreviewRenderer.Render(source, again, options with { Tone = ToneProfile.LegacyBinary });
+            True(File.ReadAllBytes(first).SequenceEqual(File.ReadAllBytes(again)),
+                "physical calibration never reapplies legacy brightness or dithering");
+            True(CountIntermediateOpaquePixels(first) > 100, "calibration spatially averages physical dots");
+            string gray = Path.Combine(directory, "gray.png");
+            RasterCodec.SavePng(gray, 65, 65, Enumerable.Repeat((byte)128, 65 * 65).ToArray(), true);
+            bool rejected = false;
+            try { CalibrationPreviewRenderer.Render(gray, again, options); }
+            catch (ArgumentException) { rejected = true; }
+            True(rejected, "physical calibration rejects an unconverted grayscale source");
+        }
+        finally { Directory.Delete(directory, true); }
     }
 
     private static void TestTables()

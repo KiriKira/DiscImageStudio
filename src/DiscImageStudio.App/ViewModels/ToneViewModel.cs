@@ -39,6 +39,7 @@ public partial class ToneViewModel : ObservableObject
     // failure with the idle hint, so the current phase is kept next to the ready flag.
     private bool _tonePreviewRendering;
     private string? _tonePreviewError;
+    private int _physicalProgressPercent;
 
     public ToneViewModel(ShellViewModel shell, DiscParametersState state, DesignViewModel design)
     {
@@ -106,7 +107,9 @@ public partial class ToneViewModel : ObservableObject
     {
         if (_tonePreviewRendering)
         {
-            return L.T("正在按当前影调渲染…");
+            return IsDvd && _state.DvdPhysicalEnabled
+                ? L.F($"正在计算物理抖动… {_physicalProgressPercent}%")
+                : L.T("正在按当前影调渲染…");
         }
 
         if (_tonePreviewError is { } error)
@@ -114,6 +117,8 @@ public partial class ToneViewModel : ObservableObject
             return L.F($"影调预览失败：{error}");
         }
 
+        if (IsDvd && _state.DvdPhysicalEnabled && _compositePath is not null)
+            return _tonePreviewReady ? L.T("物理抖动已就绪") : L.T("物理优化参数已变更，请重新计算完整结果。");
         return _tonePreviewReady ? L.T("实时更新") : L.T("导入图片后自动生成预览。");
     }
 
@@ -261,16 +266,19 @@ public partial class ToneViewModel : ObservableObject
         {
             ScheduleTonePreview();
         }
+        else if (IsDvd && _state.DvdPhysicalEnabled && _tonePreviewRendering)
+        {
+            // The preview page will reuse the same preparation; stop offscreen work.
+            InvalidateTonePreview(clearSource: false);
+        }
     }
 
     private void ScheduleTonePreview()
     {
         if (IsDvd && _state.DvdPhysicalEnabled)
         {
-            _tonePreviewCancellation?.Cancel();
-            ++_tonePreviewRevision;
-            ClearTonePreview();
-            TonePreviewStatus = L.T("物理优化参数已变更，请重新计算完整结果。");
+            // Invalidate the result, not the input needed by the manual refresh command.
+            InvalidateTonePreview(clearSource: false);
             return;
         }
         if (!_shell.IsProjectOpen
@@ -308,6 +316,7 @@ public partial class ToneViewModel : ObservableObject
     private void BeginTonePreview()
     {
         _tonePreviewReady = false;
+        _physicalProgressPercent = 0;
         _tonePreviewRendering = true;
         _tonePreviewError = null;
         TonePreviewStatus = ComposeTonePreviewStatus();
@@ -335,7 +344,15 @@ public partial class ToneViewModel : ObservableObject
             cancellationToken.ThrowIfCancellationRequested();
 
             if (IsDvd && _state.DvdPhysicalEnabled)
-                sourcePath = await _design.EnsureExportCompositeAsync(cancellationToken);
+            {
+                var progress = new Progress<double>(fraction =>
+                {
+                    if (revision != _tonePreviewRevision || !_tonePreviewRendering || cancellationToken.IsCancellationRequested) return;
+                    _physicalProgressPercent = (int)Math.Round(100 * fraction);
+                    TonePreviewStatus = ComposeTonePreviewStatus();
+                });
+                sourcePath = await _design.EnsureExportCompositeAsync(cancellationToken, progress);
+            }
             int samplesPerSector;
             bool hasFileRegionOverlay;
             if (IsDvd && _state.DvdPhysicalEnabled)
@@ -513,12 +530,14 @@ public partial class ToneViewModel : ObservableObject
         }
     }
 
-    private void ClearTonePreview()
+    private void ClearTonePreview() => InvalidateTonePreview(clearSource: true);
+
+    private void InvalidateTonePreview(bool clearSource)
     {
         _tonePreviewCancellation?.Cancel();
         _tonePreviewCancellation?.Dispose();
         _tonePreviewCancellation = null;
-        _compositePath = null;
+        if (clearSource) _compositePath = null;
         RefreshTonePreviewCommand.NotifyCanExecuteChanged();
         // A render that is still in flight belongs to the discarded state; bumping the
         // revision keeps its completion from writing the status back.

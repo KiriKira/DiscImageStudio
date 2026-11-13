@@ -47,7 +47,8 @@ public static class DvdTonePreview
             options.PitchCubic,
             options.Tone,
             SourceImageOuterRadiusMm: options.SamplingImageOuterRadiusMm,
-            PreviewOuterRadiusMm: options.OutputOuterRadiusMm);
+            PreviewOuterRadiusMm: options.OutputOuterRadiusMm,
+            PhysicalBinary: options.PhysicalBinary);
         return CalibrationPreviewRenderer.Render(
             imagePath,
             outputPath,

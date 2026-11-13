@@ -838,10 +838,20 @@ public partial class DesignViewModel : ObservableObject
 
     /// <summary>Renders (or reuses) the export-quality composite for a generation job.
     /// Throws when there is nothing to compose.</summary>
-    public async Task<string> EnsureExportCompositeAsync(CancellationToken cancellationToken = default)
+    public async Task<string> EnsureExportCompositeAsync(CancellationToken cancellationToken = default,
+        IProgress<double>? physicalProgress = null)
     {
         string source = await EnsureRawExportCompositeAsync();
-        if (!IsDvd || _state.PhysicalSettings is not { } settings) return source;
+        cancellationToken.ThrowIfCancellationRequested();
+        return IsDvd ? await PrepareDvdPhysicalSourceAsync(source, cancellationToken, physicalProgress) : source;
+    }
+
+    // Shared by design, calibration, export and burn. Calibration may also supply
+    // a standalone square source when there are no design layers.
+    internal async Task<string> PrepareDvdPhysicalSourceAsync(string source, CancellationToken cancellationToken,
+        IProgress<double>? physicalProgress = null)
+    {
+        if (_state.PhysicalSettings is not { } settings) return source;
         string Identity() => string.Join("|", _compositeRevision, _state.DvdPhysicalEnabled, _state.DvdPhysicalProfileJson,
             _state.DvdPhysicalCellUm, _state.DvdTotalSectors, _state.DvdInnerRadius, _state.DvdOuterRadius,
             _state.DvdPitchLinear, _state.DvdPitchQuadratic, _state.DvdPitchCubic,
@@ -863,7 +873,7 @@ public partial class DesignViewModel : ObservableObject
         if (cancellationToken.CanBeCanceled)
         {
             var result = await Task.Run(() => DvdPhysicalPreparation.Prepare(source, options, settings, directory,
-                volumeLabel, outerFiles, cancellationToken), cancellationToken);
+                volumeLabel, outerFiles, cancellationToken, (_, fraction) => physicalProgress?.Report(fraction)), cancellationToken);
             if (identity != Identity()) throw new OperationCanceledException("Physical inputs changed during conversion.");
             return result.MaskedPath ?? result.BinaryPath;
         }

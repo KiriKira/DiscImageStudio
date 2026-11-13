@@ -139,9 +139,10 @@
             <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                 <Button Style="{StaticResource CompactButton}" Content="{loc:Text Xaml.ResetDefaults}"
                         Command="{Binding ResetToneCommand}" />
-                <Button Style="{StaticResource CompactButton}" Content="{loc:Text Xaml.RefreshPreview}"
+                <Button x:Name="RefreshTonePreviewButton" Style="{StaticResource CompactButton}" Content="{loc:Text Xaml.RefreshPreview}"
                         Command="{Binding RefreshTonePreviewCommand}" Margin="8,0,0,0" />
             </StackPanel>
+            <TextBlock Text="{Binding TonePreviewStatus}" Style="{StaticResource CompactHint}" Margin="0,6,0,0" TextWrapping="Wrap" />
         </StackPanel>
     </Grid>
 </UserControl>
