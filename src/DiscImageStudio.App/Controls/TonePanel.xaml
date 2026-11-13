@@ -76,7 +76,7 @@
             <controls:VisibilityGate IsOpen="{Binding IsDvd}">
                 <StackPanel>
                     <CheckBox Content="物理优化（实验模型）" IsChecked="{Binding State.DvdPhysicalEnabled}" />
-                    <TextBlock Text="完整计算后用于导出和刻录；材料参数尚未实盘验证。" TextWrapping="Wrap" />
+                    <TextBlock Text="保留照片灰阶，优化抖动点的位置。完整计算后用于导出和刻录；材料参数尚未实盘验证。" TextWrapping="Wrap" />
                     <Button Style="{StaticResource CompactButton}" Content="导入材料与灯位配置" Command="{Binding ImportPhysicalProfileCommand}" />
                     <TextBlock Text="网格尺寸（微米）" />
                     <ComboBox ItemsSource="{Binding PhysicalCellChoices}" IsEditable="True" Text="{Binding State.DvdPhysicalCellUm}" />

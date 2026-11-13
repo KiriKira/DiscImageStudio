@@ -21,6 +21,10 @@ public sealed record DvdPhysicalConversionSettings
     public int MapSize { get; init; } = 97;
     public int Passes { get; init; } = 4;
     public double ToneExponent { get; init; } = 1;
+    // Photo density is perceptual by default; linear radiance is an explicit calibration choice.
+    public string ToneEncoding { get; init; } = "perceptual";
+    public double ReflectanceCompensation { get; init; } = 0;
+    public double MaximumToneShift { get; init; } = .08;
     public uint Seed { get; init; } = 43523;
     public PhysicalWavelength[] Wavelengths { get; init; } = [new(450, .2), new(550, .6), new(650, .2)];
     public PhysicalTexture[] Textures { get; init; } = [new(.025, .30, .12), new(.08, .35, .08)];
@@ -34,6 +38,9 @@ public sealed record DvdPhysicalConversionSettings
         static bool Positive(double x) => double.IsFinite(x) && x > 0;
         if (Version != 1 || Provenance is not ("hypothetical" or "measured")
             || Provenance == "measured" && string.IsNullOrWhiteSpace(Evidence)
+            || ToneEncoding is not ("perceptual" or "linear")
+            || !double.IsFinite(ReflectanceCompensation) || ReflectanceCompensation is < 0 or > 1
+            || !double.IsFinite(MaximumToneShift) || MaximumToneShift is < 0 or > 1
             || !Positive(CellUm) || !Positive(ToneExponent) || MapSize is < 17 or > 513 || Passes is < 0 or > 4
             || Recipe is not ("off" or "periodic-9b-16-v1") || Textures is not { Length: 2 }
             || Wavelengths is not { Length: >= 1 and <= 32 } || Views is not { Length: >= 1 and <= 8 } || Views.Any(v => v is null))
@@ -72,7 +79,7 @@ public sealed record DvdPhysicalConversionResult(string BinaryPath, string Repor
 
 public static class DvdPhysicalConversion
 {
-    public const string Algorithm = "dvd-physical-radiance-v2.2";
+    public const string Algorithm = "dvd-physical-density-v3";
     public static JsonSerializerOptions JsonOptions { get; } = new()
     { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true, WriteIndented = true,
       UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow };
@@ -186,16 +193,17 @@ public static class DvdPhysicalConversion
         var diagnosticFlags = new byte[size * size];
         var tone = new float[size * size];
         var mask = new bool[size * size];
-        double[][] error = Enumerable.Range(0, views).Select(_ => new double[size * 2]).ToArray();
-        double[] delta = new double[views], adjusted = new double[views];
+        double[] error = new double[size * 2];
+        double[] delta = new double[views];
         (int X, int Y, int W)[] neighbors = new (int, int, int)[4];
-        long clipped = 0, unobservable = 0, active = 0;
+        long clipped = 0, modelOutOfRange = 0, unobservable = 0, active = 0;
+        double sourceDensitySum = 0, targetDensitySum = 0;
         double continuousError = 0;
         double weightSum = settings.Views.Sum(v => v.Weight);
         double cell = radius * 2 / (size - 1);
         for (int y = 0; y < size; y++)
         {
-            cancellationToken.ThrowIfCancellationRequested(); progress?.Invoke("Radiance error diffusion", .15 + .35 * y / size);
+            cancellationToken.ThrowIfCancellationRequested(); progress?.Invoke("Photo density error diffusion", .15 + .35 * y / size);
             int dir = y % 2 == 0 ? 1 : -1;
             for (int ix = 0; ix < size; ix++)
             {
@@ -206,8 +214,8 @@ public static class DvdPhysicalConversion
                     + (int)Math.Round(x * (raster.Width - 1.0) / (size - 1))) * 4;
                 if (raster.Pixels[sourceOffset + 3] == 0) continue;
                 mask[i] = true; active++;
-                double gray = Math.Pow(ResampleSource(linearSource, raster.Width, x, y, size), settings.ToneExponent);
-                tone[i] = (float)gray;
+                double luminance = ResampleSource(linearSource, raster.Width, x, y, size);
+                double gray = Math.Pow(settings.ToneEncoding == "linear" ? luminance : EncodeSrgb(luminance), settings.ToneExponent);
                 double numerator = 0, denominator = 0;
                 for (int v = 0; v < views; v++)
                 {
@@ -218,39 +226,41 @@ public static class DvdPhysicalConversion
                 }
                 double raw = denominator < 1e-30 ? gray : numerator / denominator;
                 if (denominator < 1e-30) unobservable++;
-                if (raw < 0 || raw > 1) clipped++;
-                double p = Math.Clamp(raw, 0, 1);
-                diagnosticFlags[i] = denominator < 1e-30 ? (byte)170 : raw < 0 || raw > 1 ? (byte)255 : p is 0 or 1 ? (byte)85 : (byte)0;
+                if (raw < 0 || raw > 1) modelOutOfRange++;
+                double requested = gray + settings.ReflectanceCompensation * Math.Clamp(raw - gray, -settings.MaximumToneShift, settings.MaximumToneShift);
+                if (requested < 0 || requested > 1) clipped++;
+                double p = Math.Clamp(requested, 0, 1);
+                tone[i] = (float)p;
+                sourceDensitySum += gray; targetDensitySum += p;
+                diagnosticFlags[i] = denominator < 1e-30 ? (byte)170 : requested < 0 || requested > 1 ? (byte)255 : p is 0 or 1 ? (byte)85 : (byte)0;
                 for (int v = 0; v < views; v++)
                 {
                     double prediction = Sample(maps[2 * v], m, x, y, size) + delta[v] * p;
                     double target = lo[v] + (hi[v] - lo[v]) * gray;
                     continuousError += settings.Views[v].Weight / weightSum * Math.Pow(prediction - target, 2);
                 }
-                double score = 0;
-                for (int v = 0; v < views; v++) { adjusted[v] = delta[v] * p + error[v][(y % 2) * size + x]; score += settings.Views[v].Weight / weightSum * delta[v] * adjusted[v]; }
+                // Diffuse coverage, even where the hypothetical optical model has no contrast.
+                // Model-dependent point placement follows, with local point counts held fixed.
+                double adjusted = p + error[(y % 2) * size + x];
                 uint phase = unchecked((uint)x * 0x9E3779B1u ^ (uint)y * 0x85EBCA77u ^ settings.Seed);
                 phase ^= phase >> 16; phase = unchecked(phase * 0x7FEB352Du); phase ^= phase >> 15;
-                int code = denominator < 1e-30 ? (p >= .5 ? 1 : 0) : (2 * score >= denominator * (1 + .2 * (phase / 4294967296.0 - .5)) ? 1 : 0);
+                int code = adjusted >= .5 + .1 * (phase / 4294967296.0 - .5) ? 1 : 0;
                 pixels[i] = (byte)(code * 255);
-                if (denominator < 1e-30) continue;
-                double residual = 0;
-                for (int v = 0; v < views; v++) residual += settings.Views[v].Weight / weightSum * delta[v] * (adjusted[v] - code * delta[v]);
-                residual /= denominator;
+                double residual = adjusted - code;
                 neighbors[0] = (x + dir, y, 7); neighbors[1] = (x - dir, y + 1, 3);
                 neighbors[2] = (x, y + 1, 5); neighbors[3] = (x + dir, y + 1, 1);
                 int total = 0;
                 foreach (var n in neighbors) if (Valid(n.X, n.Y)) total += n.W;
                 foreach (var n in neighbors) if (Valid(n.X, n.Y))
-                    for (int v = 0; v < views; v++) error[v][(n.Y % 2) * size + n.X] += delta[v] * residual * n.W / total;
+                    error[(n.Y % 2) * size + n.X] += residual * n.W / total;
                 bool Valid(int xx, int yy) { if (xx < 0 || yy < 0 || xx >= size || yy >= size) return false;
                     double ax = xx * cell - radius, ay = radius - yy * cell; double r = ax * ax + ay * ay; int sourceIndex = ((int)Math.Round(yy * (raster.Height - 1.0) / (size - 1)) * raster.Width
                         + (int)Math.Round(xx * (raster.Width - 1.0) / (size - 1))) * 4;
                     return r >= inner * inner && r <= outer * outer && raster.Pixels[sourceIndex + 3] != 0; }
             }
-            foreach (var row in error) Array.Clear(row, (y % 2) * size, size);
+            Array.Clear(error, (y % 2) * size, size);
         }
-        var history = PhysicalRefinement.Refine(pixels, tone, lo, hi, mask, size, cell, maps, m,
+        var history = PhysicalRefinement.Refine(pixels, tone, mask, size, cell, maps, m,
             settings, cancellationToken, progress);
         cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(cacheDirectory);
@@ -284,7 +294,7 @@ public static class DvdPhysicalConversion
                     int i = y * previewSize + x; if (previewCount[i] == 0) continue;
                     double r0 = Sample(maps[2 * v], m, x, y, previewSize), d = Sample(maps[2 * v + 1], m, x, y, previewSize) - r0;
                     predicted[i] = DisplayGray((r0 + d * previewCodes[i] / previewCount[i]) / maximum);
-                    target[i] = DisplayGray((lo[v] + (hi[v] - lo[v]) * previewTone[i] / previewCount[i]) / maximum);
+                    target[i] = DisplayGray((r0 + d * previewTone[i] / previewCount[i]) / maximum);
                 }
                 RasterCodec.SavePng(Path.Combine(stage, $"view-{v}.png"), previewSize, previewSize, predicted, true);
                 RasterCodec.SavePng(Path.Combine(stage, $"target-{v}.png"), previewSize, previewSize, target, true);
@@ -301,9 +311,15 @@ public static class DvdPhysicalConversion
             File.WriteAllText(Path.Combine(stage, "report.json"), JsonSerializer.Serialize(new { algorithm = Algorithm,
                 settings, sourceHash, request.CanvasRadiusMm, request.InnerRadiusMm, request.OuterRadiusMm, request.TrackPitchNm,
                 referenceLow = lo, referenceHigh = hi,
+                targetDefinition = "local-mixture: R0 + (R1-R0) * density",
+                sourceMeanDensity = sourceDensitySum / Math.Max(1, active),
+                targetMeanDensity = targetDensitySum / Math.Max(1, active),
+                outputMeanDensity = pixels.Where((_, i) => mask[i]).Sum(b => b / 255.0) / Math.Max(1, active),
+                modelOutOfRangeFraction = (double)modelOutOfRange / Math.Max(1, active),
+                densityBlockSize = PhysicalRefinement.DensityBlockSize,
                 diagnosticLegend = new { endpoint = 85, unobservable = 170, clipped = 255 },
                 opticalCheckpoints = maps.Select(map => new[] { map[(m / 2) * m + m / 2], map[(m / 2) * m + 3 * m / 4] }).ToArray(),
-                result, continuousFitRms = Math.Sqrt(continuousError / Math.Max(1, active)),
+                result, globalReferenceFitRms = Math.Sqrt(continuousError / Math.Max(1, active)),
                 optimizationAcceptedReduction = history, materialValidated = settings.Provenance == "measured" }, JsonOptions));
             File.WriteAllText(Path.Combine(stage, "result.json"), JsonSerializer.Serialize(result, JsonOptions));
             cancellationToken.ThrowIfCancellationRequested();
@@ -316,8 +332,13 @@ public static class DvdPhysicalConversion
 
     private static byte DisplayGray(double linear)
     {
+        return (byte)Math.Round(255 * EncodeSrgb(linear));
+    }
+
+    private static double EncodeSrgb(double linear)
+    {
         double value = Math.Clamp(linear, 0, 1);
-        return (byte)Math.Round(255 * (value <= .0031308 ? value * 12.92 : 1.055 * Math.Pow(value, 1 / 2.4) - .055));
+        return value <= .0031308 ? value * 12.92 : 1.055 * Math.Pow(value, 1 / 2.4) - .055;
     }
 
     private static double ResampleSource(float[] source, int width, int x, int y, int size)

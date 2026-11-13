@@ -41,7 +41,10 @@ source_gray=(linear@np.array([.2126,.7152,.0722]))*source[:,:,3]+1-source[:,:,3]
 # Upsampled fixture: same bilinear convention and source float rounding as native.
 assert source_gray.shape[0]<=n,'Use an upsampled square fixture for this reference check.'
 y,x=np.meshgrid(np.linspace(0,source_gray.shape[0]-1,n),np.linspace(0,source_gray.shape[1]-1,n),indexing='ij')
-gray=map_coordinates(source_gray.astype(np.float32),[y,x],order=1,mode='nearest').astype(float)**c['toneExponent']
+gray=map_coordinates(source_gray.astype(np.float32),[y,x],order=1,mode='nearest').astype(float)
+if c.get('toneEncoding','perceptual')=='perceptual':
+    gray=np.where(gray<=.0031308,gray*12.92,1.055*gray**(1/2.4)-.055)
+gray=gray**c['toneExponent']
 y,x=np.meshgrid(np.linspace(0,m-1,n),np.linspace(0,m-1,n),indexing='ij')
 fields=np.asarray([map_coordinates(q,[y,x],order=1,mode='nearest') for q in maps.reshape(-1,m,m)]).reshape(len(c['views']),2,n,n)
 def load_codes(report):
@@ -49,20 +52,40 @@ def load_codes(report):
 b0=load_codes(before);b1=load_codes(after)
 mask=np.asarray(Image.open(after['result']['maskedPath']).convert('RGBA'))[:,:,3]>0
 cell=after['result']['cellUm']/1000
+# Optional bounded inverse; default compensation is zero.
+delta=fields[:,1]-fields[:,0]
+weights=np.array([v['weight'] for v in c['views']],dtype=float);weights/=weights.sum()
+flat=np.array(after['referenceLow'])[:,None,None]+(np.array(after['referenceHigh'])-np.array(after['referenceLow']))[:,None,None]*gray
+num=np.sum(weights[:,None,None]*delta*(flat-fields[:,0]),axis=0)
+den=np.sum(weights[:,None,None]*delta**2,axis=0)
+raw=np.divide(num,den,out=gray.copy(),where=den>=1e-30)
+density=np.clip(gray+c.get('reflectanceCompensation',0)*np.clip(raw-gray,-c.get('maximumToneShift',.08),c.get('maximumToneShift',.08)),0,1).astype(np.float32)
+contrast=np.sqrt(np.mean((maps[:,1]-maps[:,0])**2,axis=(1,2)))
+coefficients=[np.ones((n,n))]+[delta[v]/contrast[v] if contrast[v]>=1e-15 else np.zeros((n,n)) for v in range(len(c['views']))]
+field_weights=[1]+list(.25*weights)
 loss=[]
 for codes in [b0,b1]:
     value=0.
-    for v in range(len(c['views'])):
-        r0,r1=fields[v];target=after['referenceLow'][v]+(after['referenceHigh'][v]-after['referenceLow'][v])*gray
-        error=np.where(mask,r0+(r1-r0)*codes-target,0)
+    for coefficient,view_weight in zip(coefficients,field_weights):
+        error=np.where(mask,coefficient*(codes-density),0)
         for scale,weight in [(.02,1),(.06,.5),(.18,.25)]:
-            sigma=scale/cell;radius=max(1,int(np.ceil(3*sigma)))
+            sigma=max(1.2,scale/cell);radius=max(1,int(np.ceil(3*sigma)))
             q=np.arange(-radius,radius+1);k=np.exp(-.5*q*q/(sigma*sigma));k/=sum(k)
             filtered=convolve1d(convolve1d(error,k,axis=0,mode='constant'),k,axis=1,mode='constant')
-            value+=c['views'][v]['weight']*weight*np.sum(filtered[mask]**2)
+            value+=view_weight*weight*np.sum(filtered[mask]**2)
     loss.append(float(value))
 assert loss[1]<=loss[0]+max(1e-15,loss[0]*1e-7),loss
+block=after['densityBlockSize'];block_error=0;density_rmse=[]
+for top in range(0,n,block):
+    for left in range(0,n,block):
+        sl=np.s_[top:top+block,left:left+block];active=mask[sl]
+        block_error=max(block_error,int(abs(np.sum(b0[sl][active])-np.sum(b1[sl][active]))))
+        if active.any():density_rmse.append(float(np.mean(b1[sl][active])-np.mean(density[sl][active])))
+assert block_error==0,'Refinement changed a local halftone count.'
+np.testing.assert_allclose(loss[0]-loss[1],sum(after['optimizationAcceptedReduction']),rtol=1e-5,atol=1e-7)
 print(json.dumps({'optical_checkpoint_max_relative_error':float(np.max(abs(expected-np.asarray(after['opticalCheckpoints']))/np.maximum(abs(expected),1e-20))),
     'multiscale_loss_before':loss[0],'multiscale_loss_after':loss[1],
     'independent_loss_reduction':loss[0]-loss[1],
-    'native_accepted_reduction':sum(after['optimizationAcceptedReduction'])},indent=2))
+    'native_accepted_reduction':sum(after['optimizationAcceptedReduction']),
+    'max_block_count_change':block_error,
+    'block_density_rmse':float(np.sqrt(np.mean(np.array(density_rmse)**2)))},indent=2))
