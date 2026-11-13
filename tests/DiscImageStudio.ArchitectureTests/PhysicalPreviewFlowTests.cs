@@ -103,7 +103,7 @@ internal static class PhysicalPreviewFlowTests
             await RefreshLive(preview);
             CompareProjection(preview, prepared, directory);
             Require(!first.SequenceEqual(Pixels(preview.ResultImage!)), "measured geometry still warps the physical pattern");
-            Require(preview.ResultPreviewPath == composite && shell.State.DvdImagePath == composite,
+            Require(preview.ResultPreviewPath == Path.GetFileName(composite) && shell.State.DvdImagePath == composite,
                 "the temporary physical cache never replaces the source shown to the user");
 
             shell.State.DvdPhysicalEnabled = false;
