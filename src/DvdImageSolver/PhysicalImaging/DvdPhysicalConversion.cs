@@ -79,7 +79,7 @@ public sealed record DvdPhysicalConversionResult(string BinaryPath, string Repor
 
 public static class DvdPhysicalConversion
 {
-    public const string Algorithm = "dvd-physical-density-v3";
+    public const string Algorithm = "dvd-physical-density-v3.1";
     public static JsonSerializerOptions JsonOptions { get; } = new()
     { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true, WriteIndented = true,
       UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow };
@@ -269,18 +269,21 @@ public static class DvdPhysicalConversion
         var result = new DvdPhysicalConversionResult(binary, report, key, size, cell * 1000, (double)clipped / Math.Max(1, active), (double)unobservable / Math.Max(1, active), Path.Combine(directory, "masked.png"));
         try
         {
-            const int previewSize = 512;
+            int previewSize = Math.Min(512, size);
             var previewCodes = new double[previewSize * previewSize];
             var previewTone = new double[previewCodes.Length];
             var previewCount = new int[previewCodes.Length];
+            var previewTotal = new int[previewCodes.Length];
             var diagnostic = new byte[previewCodes.Length];
             for (int y = 0; y < size; y++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 for (int x = 0; x < size; x++)
                 {
-                    int i = y * size + x; if (!mask[i]) continue;
+                    int i = y * size + x;
                     int pi = Math.Min(previewSize - 1, y * previewSize / size) * previewSize + Math.Min(previewSize - 1, x * previewSize / size);
+                    previewTotal[pi]++;
+                    if (!mask[i]) continue;
                     previewCodes[pi] += pixels[i] / 255.0; previewTone[pi] += tone[i]; previewCount[pi]++;
                     diagnostic[pi] = Math.Max(diagnostic[pi], diagnosticFlags[i]);
                 }
@@ -299,6 +302,17 @@ public static class DvdPhysicalConversion
                 RasterCodec.SavePng(Path.Combine(stage, $"view-{v}.png"), previewSize, previewSize, predicted, true);
                 RasterCodec.SavePng(Path.Combine(stage, $"target-{v}.png"), previewSize, previewSize, target, true);
             }
+            // Coverage preview is explicitly area averaged, with coverage alpha at
+            // disc/mask boundaries. Never let a tiny UI thumbnail point-sample the bits.
+            var densityPreview = new byte[previewCodes.Length * 4];
+            for (int i = 0; i < previewCodes.Length; i++)
+            {
+                if (previewCount[i] == 0) continue;
+                byte gray = (byte)Math.Round(255 * previewCodes[i] / previewCount[i]);
+                densityPreview[4 * i] = densityPreview[4 * i + 1] = densityPreview[4 * i + 2] = gray;
+                densityPreview[4 * i + 3] = (byte)Math.Round(255.0 * previewCount[i] / previewTotal[i]);
+            }
+            RasterCodec.SavePng(Path.Combine(stage, "density.png"), previewSize, previewSize, densityPreview, false);
             RasterCodec.SavePng(Path.Combine(stage, "diagnostic.png"), previewSize, previewSize, diagnostic, true);
             RasterCodec.SavePng(Path.Combine(stage, "binary.png"), size, size, pixels, true);
             byte[] masked = new byte[pixels.Length * 4];

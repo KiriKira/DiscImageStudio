@@ -113,6 +113,17 @@ internal static class SelfTests
             True(Math.Abs(Density(compensated) - Density(baseline)) < settings.MaximumToneShift + .005,
                 "reflectance correction is bounded");
 
+            var thumbnailResult = PhysicalImaging.DvdPhysicalConversion.Prepare(request with
+                { Settings = zeroContrast with { CellUm = 25 } }, cache);
+            var thumbnail = RasterCodec.LoadBgra32(Path.Combine(Path.GetDirectoryName(thumbnailResult.BinaryPath)!, "density.png"));
+            Equal(512, thumbnail.Width, "physical thumbnail has bounded resolution");
+            True(Enumerable.Range(0, thumbnail.Width * thumbnail.Height).Any(i =>
+                thumbnail.Pixels[4 * i + 3] == 255 && thumbnail.Pixels[4 * i] is > 0 and < 255),
+                "physical thumbnail averages dots rather than subsampling binary cells");
+            True(Enumerable.Range(0, thumbnail.Width * thumbnail.Height).Any(i => thumbnail.Pixels[4 * i + 3] is > 0 and < 255),
+                "physical thumbnail averages mask edge coverage");
+            Equal((byte)0, thumbnail.Pixels[(256 * 512 + 256) * 4 + 3], "thumbnail keeps center hole transparent");
+
             // A gradient crosses tile boundaries and the disc mask; every partially
             // filled block must preserve its count, not just the whole-disc average.
             RasterCodec.SavePng(source, 129, 129,

@@ -71,7 +71,7 @@ public partial class ToneViewModel : ObservableObject
     {
         get
         {
-            List<PhysicalPreviewChoice> choices = [new(L.T("实际二值纹理"), -1), new(L.T("响应与影调受限区域"), -2)];
+            List<PhysicalPreviewChoice> choices = [new(L.T("抖动灰阶（面积平均）"), -1), new(L.T("响应与影调受限区域"), -2)];
             try
             {
                 if (_state.PhysicalSettings is { } settings)
@@ -340,7 +340,7 @@ public partial class ToneViewModel : ObservableObject
             bool hasFileRegionOverlay;
             if (IsDvd && _state.DvdPhysicalEnabled)
             {
-                string name = _state.DvdPhysicalPreviewIndex == -1 ? "masked.png" : _state.DvdPhysicalPreviewIndex == -2 ? "diagnostic.png" : $"view-{_state.DvdPhysicalPreviewIndex}.png";
+                string name = _state.DvdPhysicalPreviewIndex == -1 ? "density.png" : _state.DvdPhysicalPreviewIndex == -2 ? "diagnostic.png" : $"view-{_state.DvdPhysicalPreviewIndex}.png";
                 File.Copy(Path.Combine(Path.GetDirectoryName(sourcePath)!, name), outputPath, true);
                 samplesPerSector = 0;
                 hasFileRegionOverlay = false;

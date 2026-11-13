@@ -31,7 +31,7 @@
                  bitmap so custom radii and file regions retain their physical bounds. -->
             <Grid x:Name="PreviewImageHost" Width="128" Height="128"
                   HorizontalAlignment="Center" VerticalAlignment="Center">
-                <Image x:Name="PreviewDisc" Source="{Binding TonePreviewImage}" Stretch="Uniform">
+                <Image x:Name="PreviewDisc" Source="{Binding TonePreviewImage}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality">
                     <Image.Style>
                         <Style TargetType="Image">
                             <Setter Property="Visibility" Value="Collapsed" />
